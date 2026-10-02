@@ -68,6 +68,54 @@ function hired(response: request.Response) {
 }
 
 describe("agent-created hires use managed AI connections", () => {
+  it.each(["test", "save"] as const)("%s marks a hello-test authentication rejection as needing attention and reconnect repairs the same default", async (operation) => {
+    const f = await fixture("anthropic", "subscription");
+    const original = getServerAdapter(f.adapterType);
+    registerServerAdapter({ ...original, testEnvironment: async () => ({
+      adapterType: f.adapterType, status: "fail", testedAt: new Date().toISOString(),
+      checks: [{ code: "claude_hello_probe_auth_required", level: "error", message: "The account needs sign-in." }],
+    }) });
+    try {
+      const response = operation === "test"
+        ? await request(f.app).post(`/api/companies/${f.companyId}/adapters/${f.adapterType}/test-environment`).send({ agentId: f.agentId, aiConnection: f.binding, adapterConfig: {} })
+        : await request(f.app).patch(`/api/agents/${f.agentId}`).send({ adapterConfig: { model: "changed-model" } });
+      expect(response.status, JSON.stringify(response.body)).toBe(operation === "test" ? 200 : 422);
+      if (operation === "test") expect(response.body.status).toBe("fail");
+      const service = aiConnectionService(db);
+      expect(await service.list(f.companyId, f.userId)).toEqual([expect.objectContaining({ id: f.account.connectionId, isDefault: true, status: "needs_attention" })]);
+      await expect(service.select({ companyId: f.companyId, userId: f.userId, agentId: f.agentId, adapterType: f.adapterType, binding: f.binding })).rejects.toThrow("Reconnect");
+      const repaired = await service.save(f.companyId, f.userId, {
+        provider: "anthropic", method: "subscription", name: "Ignored reconnect name", ownership: "personal",
+        connectionId: f.account.connectionId, allAgents: true, agentIds: [], loginSessionId: "fixture",
+      }, "repaired-token");
+      expect(repaired).toEqual(f.account);
+      expect(await service.list(f.companyId, f.userId)).toEqual([expect.objectContaining({ id: f.account.connectionId, isDefault: true, status: "connected" })]);
+      const installs = await db.select().from(toolConnectionInstalls).where(eq(toolConnectionInstalls.connectionId, f.account.connectionId));
+      expect(installs).toEqual([expect.objectContaining({ targetType: "agent", targetId: f.agentId })]);
+    } finally { unregisterServerAdapter(f.adapterType); }
+  });
+
+  it.each([false, true])("a failed environment test preserves connection health for a runtime failure or a newer reconnect (reconnected: %s)", async (reconnected) => {
+    const f = await fixture("anthropic", "subscription");
+    const original = getServerAdapter(f.adapterType);
+    registerServerAdapter({ ...original, testEnvironment: async () => {
+      if (reconnected) await aiConnectionService(db).save(f.companyId, f.userId, {
+        provider: "anthropic", method: "subscription", name: "My Claude", ownership: "personal",
+        connectionId: f.account.connectionId, allAgents: false, agentIds: [f.agentId], loginSessionId: "fixture",
+      }, "newer-token");
+      return {
+        adapterType: f.adapterType, status: "fail", testedAt: new Date().toISOString(),
+        checks: [{ code: reconnected ? "claude_hello_probe_auth_required" : "claude_cli_not_found", level: "error", message: "Test failed." }],
+      };
+    } });
+    try {
+      const response = await request(f.app).post(`/api/companies/${f.companyId}/adapters/${f.adapterType}/test-environment`).send({ agentId: f.agentId, aiConnection: f.binding, adapterConfig: {} });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      expect(response.body.status).toBe("fail");
+      expect(await aiConnectionService(db).list(f.companyId, f.userId)).toEqual([expect.objectContaining({ status: "connected" })]);
+    } finally { unregisterServerAdapter(f.adapterType); }
+  });
+
   for (const endpoint of ["agent-hires", "agents"]) {
     it.each([
       ["anthropic", "api_key"], ["anthropic", "subscription"],
