@@ -286,7 +286,13 @@ test("AgentMail setup and email work through the normal task conversation", asyn
   await expect(page.getByRole("heading", { name: "Connection activity", exact: true })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("agentmail-management-tabs.png"), fullPage: true });
   await navigation.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Receiving email", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy email address", exact: true })).toBeVisible();
+  await expect(page.getByLabel("New API key", { exact: true })).not.toBeVisible();
+  await page.locator("summary").filter({ hasText: "Reconnect inbox" }).click();
+  await expect(page.getByLabel("New API key", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Reconnect inbox", exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("agentmail-settings-reconnect.png"), fullPage: true });
   await page.goto(`/${company.issuePrefix}/issues/${task.identifier}`);
   const email = page.getByRole("article", { name: "Email received", exact: true });
   await expect(email).toBeVisible();
