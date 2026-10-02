@@ -198,10 +198,15 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
   /**
    * One past the identity of the last transcript build that went through this
    * module. Each {@link createStdoutParser} call is a new build, so it gets a
-   * new id: the worker drops the previous build's stateful parser instance and
-   * cache entries when it sees the new id.
+   * new id: the worker drops the previous build's stateful parser instance
+   * when it sees the new id, so a stateful parser never carries Reasoning-box
+   * (or similar) state across builds. Cache entries are keyed per line
+   * occurrence without the build id — see {@link createStdoutParser}.
    */
   let lastBuildId = 0;
+
+  /** Upper bound on cached results; {@link createStdoutParser} reset trims. */
+  const MAX_PARSE_CACHE_ENTRIES = 8192;
 
   const requestParse = (key: string, buildId: number | undefined, line: string, ts: string, notify: boolean) => {
     if (pendingParseKeys.has(key)) return;
@@ -227,12 +232,16 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
   };
 
   /**
-   * Stateful entry point: one instance per transcript build.
+   * Stateful entry point: one worker parser instance per transcript build.
    *
-   * The cache is keyed per line occurrence (`buildId` + position) rather than
+   * The cache is keyed per line occurrence (position + ts + line) rather than
    * per (ts, line): identical lines are common in stream output (Reasoning box
    * borders, wrapped blanks), and a (ts, line) hit would silently skip feeding
-   * the parser, desyncing its state.
+   * the parser, desyncing its state. The build id is deliberately NOT part of
+   * the key: a rebuild replays the same lines in the same order, so keys that
+   * changed per build would miss forever, and every miss notifies, so each
+   * notification would schedule another rebuild and the transcript would never
+   * settle into parsed output.
    *
    * Cached lines are still forwarded to the worker — a stateful parser must
    * observe every line in order, so the cache only avoids recomputing the
@@ -244,19 +253,17 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
 
     return {
       parseLine: (line: string, ts: string) => {
-        const key = `${buildId}\u0000${ordinal++}\u0000${lineCacheKey(line, ts)}`;
+        const key = `${ordinal++}\u0000${lineCacheKey(line, ts)}`;
         const cached = parseCache.get(key);
         // Feed the worker even on a hit; return the known result immediately.
         requestParse(key, buildId, line, ts, !cached);
         return cached ? cached.slice() : [];
       },
       reset: () => {
-        // buildTranscript resets when a build ends. This build's entries can
-        // never be hit again (its buildId is retired), so drop them.
-        const prefix = `${buildId}\u0000`;
-        for (const key of parseCache.keys()) {
-          if (key.startsWith(prefix)) parseCache.delete(key);
-        }
+        // buildTranscript resets when a build ends. Entries must survive so
+        // the next build — a fresh worker parser over the same lines — hits
+        // them; only trim once the cache grows past its bound.
+        if (parseCache.size > MAX_PARSE_CACHE_ENTRIES) parseCache.clear();
       },
     };
   };
