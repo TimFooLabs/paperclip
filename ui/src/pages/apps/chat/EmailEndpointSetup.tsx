@@ -643,9 +643,11 @@ export function EmailEndpointSettings({
             </CopyText>
           )}
         </div>
-        <p className="text-sm text-muted-foreground">
-          Send an email to this address to start a task with {assignedAgentName}.
-        </p>
+        {inbox.status === "active" && inbox.address && !inbox.lastError && (
+          <p className="text-sm text-muted-foreground">
+            Send an email to this address to start a task with {assignedAgentName}.
+          </p>
+        )}
       </header>
 
       <Card className="gap-2 p-4">
