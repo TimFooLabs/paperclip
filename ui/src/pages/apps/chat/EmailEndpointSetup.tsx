@@ -643,7 +643,7 @@ export function EmailEndpointSettings({
             </CopyText>
           )}
         </div>
-        {inbox.status === "active" && inbox.address && !inbox.lastError && (
+        {inbox.status === "active" && inbox.address && (
           <p className="text-sm text-muted-foreground">
             Send an email to this address to start a task with {assignedAgentName}.
           </p>
