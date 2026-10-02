@@ -138,6 +138,12 @@ function stripTrailingReasoningBorder(text) {
 // Hermes wraps reasoning at the terminal width and drops the trailing space
 // at each break, so every line carries an explicit newline to keep words from
 // fusing; markdown renders that soft break back into a space.
+// Every interior line carries `delta: true`: appendTranscriptEntry only merges
+// into a chain whose head is also a delta, so a `delta: false` head would split
+// each box into two bubbles. The cost is that two Reasoning boxes emitted back
+// to back share one bubble — the delta contract has no way to start a new
+// segment within the same kind, and a fragmented box is worse than a merged
+// pair of adjacent boxes.
 function reasoningLineEntry(text, ts) {
   return { kind: "thinking", ts, text: `${text}\n`, delta: true };
 }
