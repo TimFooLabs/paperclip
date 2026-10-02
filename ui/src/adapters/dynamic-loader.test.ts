@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { invalidateDynamicParser, loadDynamicParser } from "./dynamic-loader";
 import { getWorkerBootstrapSource } from "./sandboxed-parser-worker";
 import { buildTranscript, type RunLogChunk } from "./transcript";
+import type { StdoutLineParser, StdoutParserFactory } from "./types";
 
 /**
  * The dynamic loader talks to a real Worker, which does not exist in Node.
@@ -22,6 +23,13 @@ vi.mock("./sandboxed-parser-worker", async (importOriginal) => {
   };
 });
 
+/** The part of the worker global scope the bootstrap touches. */
+type WorkerSelf = {
+  navigator: Record<string, unknown>;
+  postMessage: (msg: { type: string }) => void;
+  onmessage?: (e: { data: unknown }) => void;
+};
+
 class FakeSandboxWorker {
   onmessage: ((e: { data: unknown }) => void) | null = null;
   onerror: ((e: { message?: string }) => void) | null = null;
@@ -30,8 +38,7 @@ class FakeSandboxWorker {
   /** Replies posted back to the main thread. */
   replies = 0;
   terminated = false;
-
-  private readonly self: Record<string, unknown>;
+  private readonly self: WorkerSelf;
 
   constructor() {
     this.self = {
@@ -88,15 +95,19 @@ function lineChunks(lines: string[], ts: string): RunLogChunk[] {
   return lines.map((line, index) => ({ ts, stream: "stdout" as const, chunk: `${line}\n`, seq: index }));
 }
 
-async function loadStatefulParser(adapterType: string) {
+async function loadStatefulParser(
+  adapterType: string,
+): Promise<{ parseStdoutLine: StdoutLineParser; createStdoutParser: StdoutParserFactory }> {
   currentWorker = new FakeSandboxWorker();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(STATEFUL_PARSER_SOURCE, { status: 200 })),
   );
   const parserModule = await loadDynamicParser(adapterType);
-  expect(parserModule?.createStdoutParser).toBeTypeOf("function");
-  return parserModule!;
+  const createStdoutParser = parserModule?.createStdoutParser;
+  expect(createStdoutParser).toBeTypeOf("function");
+  if (!createStdoutParser || !parserModule) throw new Error("stateful parser source did not load");
+  return { parseStdoutLine: parserModule.parseStdoutLine, createStdoutParser };
 }
 
 /** Wait until every parse request sent so far has been answered. */
@@ -169,7 +180,7 @@ describe("dynamic loader — stateful parsers across transcript rebuilds", () =>
     const parserModule = await loadStatefulParser("fake-adapter-transcript");
     const chunks = lineChunks(LINES, "2026-06-29T12:00:00.000Z");
 
-    const first = buildTranscript(chunks, { createStdoutParser: parserModule.createStdoutParser });
+    const first = buildTranscript(chunks, parserModule);
     // Nothing is cached on the first pass: every miss returns [], so the
     // transcript renders empty until the worker's results come back.
     expect(first).toEqual([]);
@@ -177,7 +188,7 @@ describe("dynamic loader — stateful parsers across transcript rebuilds", () =>
     await settle();
 
     // The rebuild the UI runs once results arrive must show the parsed kinds.
-    const second = buildTranscript(chunks, { createStdoutParser: parserModule.createStdoutParser });
+    const second = buildTranscript(chunks, parserModule);
     expect(second.map((entry) => entry.kind)).toEqual(["thinking", "assistant"]);
   });
 });
