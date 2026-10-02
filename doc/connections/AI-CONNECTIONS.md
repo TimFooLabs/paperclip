@@ -87,10 +87,10 @@ and authentication paths are never account labels.
 
 Company-scoped `/api/companies/:companyId/ai-connections` operations provide list,
 API-key creation/reconnect, personal defaults, completed login references, and
-active-run attribution. Existing Connections operations handle naming, access,
-The list includes `canManageConnections`, evaluated by the same server permission
-check as creation, including custom `tools:manage_connections` grants.
-and revocation. Mutation authorization is enforced server-side. OpenAPI documents the new board-only
+active-run attribution. The list includes `canManageConnections`, evaluated by
+the same server permission check as creation, including custom
+`tools:manage_connections` grants. Existing Connections operations handle naming,
+access, and revocation. Mutation authorization is enforced server-side. OpenAPI documents the new board-only
 operations. Agent-originated configuration and environment tests resolve the
 authenticated request’s responsible user; an agent ID is never a personal-account
 owner. A missing responsible identity blocks personal-default resolution.
