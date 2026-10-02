@@ -8,9 +8,10 @@ import type { AiManagedConnectionSummary } from "@paperclipai/shared";
 import { AiConnectionField } from "./AiConnectionField";
 import type { AiConnectionCredentialStep } from "./AiConnectionCredentialStep";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), setDefault: vi.fn() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), setDefault: vi.fn(), boardAccess: vi.fn() }));
 let credentialProps: ComponentProps<typeof AiConnectionCredentialStep> | undefined;
 vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: mocks }));
+vi.mock("@/api/access", () => ({ accessApi: { getCurrentBoardAccess: mocks.boardAccess } }));
 vi.mock("./AiConnectionCredentialStep", () => ({
   AiConnectionCredentialStep: (props: ComponentProps<typeof AiConnectionCredentialStep>) => {
     credentialProps = props;
@@ -53,6 +54,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   credentialProps = undefined;
   mocks.setDefault.mockResolvedValue({});
+  mocks.boardAccess.mockResolvedValue({ source: "local_implicit" });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -89,9 +91,9 @@ it("selects the returned new grant and actual method before adopting the persona
 it("lets the owner limit a new personal connection to this agent", async () => {
   await mount([]);
   click("Connect another account");
-  const checkbox = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  const checkbox = document.querySelector<HTMLButtonElement>('[role="checkbox"]')!;
   expect(checkbox).not.toBeNull();
-  expect(checkbox.checked).toBe(true);
+  expect(checkbox.getAttribute("aria-checked")).toBe("true");
   flushSync(() => checkbox.click());
   expect(credentialProps).toMatchObject({ allAgents: false, agentIds: ["agent"] });
 });
@@ -113,4 +115,11 @@ it("keeps default-update failures visible and retries without another provider l
 it("does not offer reconnection for a healthy default or another owner's account", async () => {
   await mount([account({ status: "connected" }), account({ id: "someone-else", ownerUserId: "other" })]);
   expect(document.body.textContent).not.toContain("Reconnect account");
+});
+
+it("keeps an ordinary member's new connection scoped to the current agent by default", async () => {
+  mocks.boardAccess.mockResolvedValue({ source: "session", memberships: [{ companyId: "company", status: "active", membershipRole: "member" }] });
+  await mount([]);
+  click("Connect another account");
+  expect(credentialProps).toMatchObject({ allAgents: false, agentIds: ["agent"] });
 });

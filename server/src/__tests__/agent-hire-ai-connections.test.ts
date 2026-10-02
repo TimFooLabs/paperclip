@@ -70,6 +70,7 @@ function hired(response: request.Response) {
 describe("agent-created hires use managed AI connections", () => {
   it.each(["test", "save"] as const)("%s marks a hello-test authentication rejection as needing attention and reconnect repairs the same default", async (operation) => {
     const f = await fixture("anthropic", "subscription");
+    await db.insert(principalPermissionGrants).values({ companyId: f.companyId, principalType: "user", principalId: f.userId, permissionKey: "agents:configure" });
     const original = getServerAdapter(f.adapterType);
     registerServerAdapter({ ...original, testEnvironment: async () => ({
       adapterType: f.adapterType, status: "fail", testedAt: new Date().toISOString(),
@@ -92,11 +93,23 @@ describe("agent-created hires use managed AI connections", () => {
       expect(await service.list(f.companyId, f.userId)).toEqual([expect.objectContaining({ id: f.account.connectionId, isDefault: true, status: "connected" })]);
       const installs = await db.select().from(toolConnectionInstalls).where(eq(toolConnectionInstalls.connectionId, f.account.connectionId));
       expect(installs).toEqual([expect.objectContaining({ targetType: "agent", targetId: f.agentId })]);
+      registerServerAdapter({ ...original, testEnvironment: async () => ({
+        adapterType: f.adapterType, status: "pass", testedAt: new Date().toISOString(),
+        checks: [{ code: "claude_hello_probe_passed", level: "info", message: "hello" }],
+      }) });
+      const saved = await request(f.app).patch(`/api/agents/${f.agentId}`).send({ adapterConfig: { model: "changed-model" } });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      const runtime = await prepareManagedAiRuntime(db, { companyId: f.companyId, agentId: f.agentId, responsibleUserId: f.userId, adapterType: f.adapterType, binding: f.binding, config: saved.body.adapterConfig });
+      try {
+        expect(runtime.attribution.grantId).toBe(f.account.grantId);
+        expect((runtime.config.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN).toBe("repaired-token");
+      } finally { await runtime.cleanup(); }
     } finally { unregisterServerAdapter(f.adapterType); }
   });
 
   it.each([false, true])("a failed environment test preserves connection health for a runtime failure or a newer reconnect (reconnected: %s)", async (reconnected) => {
     const f = await fixture("anthropic", "subscription");
+    await db.insert(principalPermissionGrants).values({ companyId: f.companyId, principalType: "user", principalId: f.userId, permissionKey: "agents:configure" });
     const original = getServerAdapter(f.adapterType);
     registerServerAdapter({ ...original, testEnvironment: async () => {
       if (reconnected) await aiConnectionService(db).save(f.companyId, f.userId, {
