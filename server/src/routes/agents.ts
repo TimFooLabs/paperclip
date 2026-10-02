@@ -3320,7 +3320,8 @@ export function agentRoutes(
     // A provider rejection invalidates the tested credential generation. A
     // missing CLI, unavailable environment, or other runtime error does not.
     if (result.status === "fail" && result.checks.some(check =>
-      check.code === ADAPTER_AUTH_MISSING_CHECK_CODE || /_hello_probe_auth_required$/.test(check.code),
+      check.code === ADAPTER_AUTH_MISSING_CHECK_CODE || /_hello_probe_auth_required$/.test(check.code)
+        || check.code === "ai_connection_api_key_rejected",
     )) {
       await aiConnectionService(db).markAuthenticationFailed({
         companyId: context.companyId, agentId, runStartedAt: startedAt,
@@ -3359,7 +3360,8 @@ export function agentRoutes(
         result.checks.push({ code: "ai_connection_api_key_reverified", level: "info", message: "The provider verified this API key for adoption." });
       } catch (error) {
         result.status = "fail";
-        result.checks.push({ code: "ai_connection_api_key_rejected", level: "error", message: error instanceof HttpError ? error.message : "Could not verify the account. Try again." });
+        const rejected = error instanceof HttpError && asRecord(error.details)?.code === "ai_connection_api_key_rejected";
+        result.checks.push({ code: rejected ? "ai_connection_api_key_rejected" : "ai_connection_verification_failed", level: "error", message: error instanceof HttpError ? error.message : "Could not verify the account. Try again." });
       }
       return result;
     }

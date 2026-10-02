@@ -88,6 +88,8 @@ and authentication paths are never account labels.
 Company-scoped `/api/companies/:companyId/ai-connections` operations provide list,
 API-key creation/reconnect, personal defaults, completed login references, and
 active-run attribution. Existing Connections operations handle naming, access,
+The list includes `canManageConnections`, evaluated by the same server permission
+check as creation, including custom `tools:manage_connections` grants.
 and revocation. Mutation authorization is enforced server-side. OpenAPI documents the new board-only
 operations. Agent-originated configuration and environment tests resolve the
 authenticated request’s responsible user; an agent ID is never a personal-account
@@ -148,7 +150,8 @@ establish quota exhaustion.
 
 `prepareManagedAiRuntime` is shared by runs, environment tests, and adoption.
 Test and Save mark the tested account as needing attention when its provider
-hello test explicitly rejects authentication. Runtime and environment failures
+hello test rejects authentication or its API-key check returns 401 or 403.
+Network, quota, runtime, and environment failures
 do not change credential health. The same generation check protects a newer
 reconnect from a late test result. Claude ACP's typed `access` failure is its
 provider `auth_required` signal and enters the existing sign-in recovery path,

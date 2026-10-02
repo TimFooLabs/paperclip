@@ -9,8 +9,6 @@ import {
   type AiManagedConnectionSummary,
 } from "@paperclipai/shared";
 import { aiConnectionsApi } from "@/api/ai-connections";
-import { accessApi } from "@/api/access";
-import { queryKeys } from "@/lib/queryKeys";
 import { AiConnectionPicker } from "./AiConnectionPicker";
 import { AiConnectionLegacyNotice } from "./AiConnectionManagement";
 import { AiConnectionCredentialStep } from "./AiConnectionCredentialStep";
@@ -79,17 +77,6 @@ export function AiConnectionField({
     queryFn: () => aiConnectionsApi.list(companyId, agentId),
     enabled: Boolean(provider),
   });
-  const boardAccess = useQuery({
-    queryKey: queryKeys.access.currentBoardAccess,
-    queryFn: () => accessApi.getCurrentBoardAccess(),
-    enabled: Boolean(provider) && !readOnly,
-    retry: false,
-  });
-  const membership = boardAccess.data?.memberships?.find((item) => item.companyId === companyId && item.status === "active");
-  // Company-wide installs require a connection manager. Custom permission
-  // grants can still opt in; the server remains authoritative.
-  const defaultAllAgents = boardAccess.data?.source === "local_implicit" || Boolean(boardAccess.data?.isInstanceAdmin)
-    || membership?.membershipRole === "owner" || membership?.membershipRole === "admin";
   const personalDefault = accounts.data?.connections.find((account) => account.provider === provider && account.isDefault && account.ownership === "personal" && account.ownerUserId === accounts.data.currentUserId);
   const selectDefault = useMutation({
     mutationFn: async (result: NonNullable<typeof savedAccount>) => {
@@ -107,7 +94,7 @@ export function AiConnectionField({
   const openConnection = (reconnect?: AiManagedConnectionSummary) => {
     returnFocus.current = document.activeElement as HTMLElement;
     setReconnecting(reconnect);
-    setAllAgents(defaultAllAgents);
+    setAllAgents(accounts.data?.canManageConnections ?? false);
     setSavedAccount(undefined);
     selectDefault.reset();
     setConnecting(true);

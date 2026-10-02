@@ -68,6 +68,26 @@ function hired(response: request.Response) {
 }
 
 describe("agent-created hires use managed AI connections", () => {
+  for (const operation of ["test", "save"] as const) {
+    it.each([401, 403, 429, 503, null])(`${operation} changes API-key health only for a provider rejection (status: %s)`, async (status) => {
+      const f = await fixture("anthropic", "api_key");
+      await db.insert(principalPermissionGrants).values({ companyId: f.companyId, principalType: "user", principalId: f.userId, permissionKey: "agents:configure" });
+      const original = getServerAdapter(f.adapterType);
+      registerServerAdapter({ ...original, testEnvironment: async () => ({ adapterType: f.adapterType, status: "pass", checks: [], testedAt: new Date().toISOString() }) });
+      const network = vi.spyOn(globalThis, "fetch");
+      if (status === null) network.mockRejectedValue(new Error("Network unavailable"));
+      else network.mockResolvedValue(new Response(null, { status }));
+      try {
+        const response = operation === "test"
+          ? await request(f.app).post(`/api/companies/${f.companyId}/adapters/${f.adapterType}/test-environment`).send({ agentId: f.agentId, aiConnection: f.binding, adapterConfig: {} })
+          : await request(f.app).patch(`/api/agents/${f.agentId}`).send({ adapterConfig: { model: "changed-model" } });
+        expect(response.status, JSON.stringify(response.body)).toBe(operation === "test" ? 200 : 422);
+        const rejected = status === 401 || status === 403;
+        expect(await aiConnectionService(db).list(f.companyId, f.userId)).toEqual([expect.objectContaining({ status: rejected ? "needs_attention" : "connected" })]);
+      } finally { network.mockRestore(); unregisterServerAdapter(f.adapterType); }
+    });
+  }
+
   it.each(["test", "save"] as const)("%s marks a hello-test authentication rejection as needing attention and reconnect repairs the same default", async (operation) => {
     const f = await fixture("anthropic", "subscription");
     await db.insert(principalPermissionGrants).values({ companyId: f.companyId, principalType: "user", principalId: f.userId, permissionKey: "agents:configure" });

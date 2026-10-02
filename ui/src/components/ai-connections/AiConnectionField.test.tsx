@@ -8,10 +8,9 @@ import type { AiManagedConnectionSummary } from "@paperclipai/shared";
 import { AiConnectionField } from "./AiConnectionField";
 import type { AiConnectionCredentialStep } from "./AiConnectionCredentialStep";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), setDefault: vi.fn(), boardAccess: vi.fn() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), setDefault: vi.fn() }));
 let credentialProps: ComponentProps<typeof AiConnectionCredentialStep> | undefined;
 vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: mocks }));
-vi.mock("@/api/access", () => ({ accessApi: { getCurrentBoardAccess: mocks.boardAccess } }));
 vi.mock("./AiConnectionCredentialStep", () => ({
   AiConnectionCredentialStep: (props: ComponentProps<typeof AiConnectionCredentialStep>) => {
     credentialProps = props;
@@ -37,8 +36,8 @@ async function settle() {
     flushSync(() => {});
   }
 }
-async function mount(connections: AiManagedConnectionSummary[]) {
-  mocks.list.mockResolvedValue({ currentUserId: "owner", connections });
+async function mount(connections: AiManagedConnectionSummary[], canManageConnections = true) {
+  mocks.list.mockResolvedValue({ currentUserId: "owner", connections, canManageConnections });
   flushSync(() => root.render(<QueryClientProvider client={client}>
     <AiConnectionField companyId="company" agentId="agent" agentName="Nova" adapterType="claude_local"
       value={{ provider: "anthropic", method: "subscription", mode: "responsible_user" }} onChange={onChange} />
@@ -54,7 +53,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   credentialProps = undefined;
   mocks.setDefault.mockResolvedValue({});
-  mocks.boardAccess.mockResolvedValue({ source: "local_implicit" });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -118,8 +116,13 @@ it("does not offer reconnection for a healthy default or another owner's account
 });
 
 it("keeps an ordinary member's new connection scoped to the current agent by default", async () => {
-  mocks.boardAccess.mockResolvedValue({ source: "session", memberships: [{ companyId: "company", status: "active", membershipRole: "member" }] });
-  await mount([]);
+  await mount([], false);
   click("Connect another account");
   expect(credentialProps).toMatchObject({ allAgents: false, agentIds: ["agent"] });
+});
+
+it("uses the server's connection-manager permission for company-wide access", async () => {
+  await mount([], true);
+  click("Connect another account");
+  expect(credentialProps).toMatchObject({ allAgents: true });
 });
