@@ -39,7 +39,13 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Receiving: Story = {};
+export const Receiving: Story = { play: async ({ canvasElement }) => {
+  const canvas = within(canvasElement);
+  const copyAddress = await canvas.findByRole("button", { name: "Copy email address" });
+  await expect(copyAddress).toHaveTextContent("ralph@paperclip.example");
+  await expect(canvas.getByRole("link", { name: "View inbox" })).toHaveAttribute(
+    "href", "https://console.agentmail.to/dashboard/inboxes/ralph%40paperclip.example");
+} };
 export const Paused: Story = { parameters: { inbox: { status: "paused" } }, play: async ({ canvasElement }) => {
   const canvas = within(canvasElement);
   await expect(await canvas.findByRole("button", { name: "Resume" })).toBeVisible();
@@ -49,6 +55,7 @@ export const AddressNotAssigned: Story = { parameters: { inbox: { status: "draft
   const canvas = within(canvasElement);
   await expect(await canvas.findByRole("heading", { name: "Email inbox" })).toBeVisible();
   await expect(canvas.queryByRole("button", { name: "Copy email address" })).not.toBeInTheDocument();
+  await expect(canvas.queryByRole("link", { name: "View inbox" })).not.toBeInTheDocument();
   await expect(canvas.queryByText(/Send an email to this address to start a task/)).not.toBeInTheDocument();
 } };
 export const NeedsAttention: Story = { parameters: { inbox: { status: "revoked", lastError: "AgentMail rejected the API key. Reconnect this inbox with a valid key." } }, play: async ({ canvasElement }) => {

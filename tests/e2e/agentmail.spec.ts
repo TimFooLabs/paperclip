@@ -287,7 +287,15 @@ test("AgentMail setup and email work through the normal task conversation", asyn
   await page.screenshot({ path: test.info().outputPath("agentmail-management-tabs.png"), fullPage: true });
   await navigation.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Receiving email", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Copy email address", exact: true })).toBeVisible();
+  const copyAddress = page.getByRole("button", { name: "Copy email address", exact: true });
+  await expect(copyAddress).toHaveText(inbox.address);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await copyAddress.click();
+  await expect(page.getByRole("status").filter({ hasText: "Copied!" })).toHaveCSS("opacity", "1");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(inbox.address);
+  await expect(page.getByRole("link", { name: "View inbox", exact: true })).toHaveAttribute(
+    "href", `https://console.agentmail.to/dashboard/inboxes/${encodeURIComponent(inbox.address)}`);
+  await page.screenshot({ path: test.info().outputPath("agentmail-settings-copy-inbox.png"), fullPage: true });
   await expect(page.getByLabel("New API key", { exact: true })).not.toBeVisible();
   await page.locator("summary").filter({ hasText: "Reconnect inbox" }).click();
   await expect(page.getByLabel("New API key", { exact: true })).toBeVisible();

@@ -105,7 +105,9 @@ Each inbox has distinct **Settings**, **Access**, **Conversations**, and
 **Activity** views. Access reuses the saved account's credential and agent controls,
 so changes apply to every inbox using that account. Conversations links email
 threads to their tasks; Activity shows the shared delivery and publication feed.
-Settings leads with the agent’s copyable email address and how email becomes tasks.
+Settings leads with the agent’s email address: click it to copy with confirmation,
+or use **View inbox** to open that inbox in AgentMail’s console. It also explains
+how email becomes tasks.
 Receiving mode, last mail check, and Pause/Resume are grouped below. Reconnect
 credentials live in an expandable section, followed by a separate Disconnect
 action. Inbox lifecycle controls use the email API, and reconnect opens inbox Settings.

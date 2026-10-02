@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Check,
   Copy,
+  ExternalLink,
   Mail,
 } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
@@ -634,13 +635,22 @@ export function EmailEndpointSettings({
     <div className="max-w-2xl space-y-8 pb-8">
       <header className="space-y-2">
         <p className="text-sm text-muted-foreground">{assignedAgentName}’s email address</p>
-        <div className="flex items-start gap-2">
-          <h1 className="min-w-0 break-all text-xl font-bold">{inbox.address ?? "Email inbox"}</h1>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 aria-label={inbox.address ?? undefined} className="min-w-0 break-all text-xl font-bold">
+            {inbox.address ? (
+              <CopyText text={inbox.address} ariaLabel="Copy email address" title="Copy email address"
+                containerClassName="max-w-full" className="flex min-w-0 items-center gap-2 rounded-md text-left">
+                <span className="min-w-0 break-all">{inbox.address}</span>
+                <Copy aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+              </CopyText>
+            ) : "Email inbox"}
+          </h1>
           {inbox.address && (
-            <CopyText text={inbox.address} ariaLabel="Copy email address" title="Copy email address"
-              className="rounded-md p-1 text-muted-foreground">
-              <Copy className="size-4" />
-            </CopyText>
+            <a href={`https://console.agentmail.to/dashboard/inboxes/${encodeURIComponent(inbox.address)}`}
+              target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground">
+              View inbox <ExternalLink aria-hidden="true" className="size-3" />
+            </a>
           )}
         </div>
         {inbox.status === "active" && inbox.address && (
