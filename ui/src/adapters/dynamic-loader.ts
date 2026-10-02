@@ -87,12 +87,20 @@ function notifyResultReady(): void {
 /**
  * Parse a single line synchronously by delegating to the worker.
  * Returns a Promise that resolves with the TranscriptEntry[] from the worker.
+ *
+ * `buildId` tells the worker which transcript build the line belongs to, so a
+ * stateful parser (Reasoning-box tracking) starts fresh on every build.
  */
-function parseLineAsync(sandbox: SandboxedParser, line: string, ts: string): Promise<TranscriptEntry[]> {
+function parseLineAsync(
+  sandbox: SandboxedParser,
+  line: string,
+  ts: string,
+  buildId?: number,
+): Promise<TranscriptEntry[]> {
   return new Promise((resolve) => {
     const id = nextRequestId(sandbox);
     sandbox.pendingResolves.set(id, resolve);
-    sendToWorker(sandbox, { type: "parse", id, line, ts });
+    sendToWorker(sandbox, { type: "parse", id, line, ts, buildId });
   });
 }
 
@@ -187,24 +195,73 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
   const parseCache = new Map<string, TranscriptEntry[]>();
   const pendingParseKeys = new Set<string>();
 
+  /**
+   * One past the identity of the last transcript build that went through this
+   * module. Each {@link createStdoutParser} call is a new build, so it gets a
+   * new id: the worker drops the previous build's stateful parser instance and
+   * cache entries when it sees the new id.
+   */
+  let lastBuildId = 0;
+
+  const requestParse = (key: string, buildId: number | undefined, line: string, ts: string, notify: boolean) => {
+    if (pendingParseKeys.has(key)) return;
+    pendingParseKeys.add(key);
+    parseLineAsync(sandbox, line, ts, buildId).then((entries) => {
+      pendingParseKeys.delete(key);
+      parseCache.set(key, entries);
+      if (notify) notifyResultReady();
+    });
+  };
+
+  /**
+   * Legacy stateless entry point. Results are cached per (ts, line), which is
+   * only sound while the parser has no cross-line state.
+   */
   const parseStdoutLine: StdoutLineParser = (line: string, ts: string) => {
     const key = lineCacheKey(line, ts);
     const cached = parseCache.get(key);
     if (cached) return cached.slice();
 
-    if (!pendingParseKeys.has(key)) {
-      pendingParseKeys.add(key);
-      parseLineAsync(sandbox, line, ts).then((entries) => {
-        pendingParseKeys.delete(key);
-        parseCache.set(key, entries);
-        notifyResultReady();
-      });
-    }
-
+    requestParse(key, undefined, line, ts, true);
     return [];
   };
 
-  return { parseStdoutLine };
+  /**
+   * Stateful entry point: one instance per transcript build.
+   *
+   * The cache is keyed per line occurrence (`buildId` + position) rather than
+   * per (ts, line): identical lines are common in stream output (Reasoning box
+   * borders, wrapped blanks), and a (ts, line) hit would silently skip feeding
+   * the parser, desyncing its state.
+   *
+   * Cached lines are still forwarded to the worker — a stateful parser must
+   * observe every line in order, so the cache only avoids recomputing the
+   * *result*, never the feed. Only misses trigger a transcript recompute.
+   */
+  const createStdoutParser: StdoutParserFactory = () => {
+    const buildId = ++lastBuildId;
+    let ordinal = 0;
+
+    return {
+      parseLine: (line: string, ts: string) => {
+        const key = `${buildId}\u0000${ordinal++}\u0000${lineCacheKey(line, ts)}`;
+        const cached = parseCache.get(key);
+        // Feed the worker even on a hit; return the known result immediately.
+        requestParse(key, buildId, line, ts, !cached);
+        return cached ? cached.slice() : [];
+      },
+      reset: () => {
+        // buildTranscript resets when a build ends. This build's entries can
+        // never be hit again (its buildId is retired), so drop them.
+        const prefix = `${buildId}\u0000`;
+        for (const key of parseCache.keys()) {
+          if (key.startsWith(prefix)) parseCache.delete(key);
+        }
+      },
+    };
+  };
+
+  return { parseStdoutLine, createStdoutParser };
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

@@ -188,12 +188,41 @@ describe("parseHermesStdoutLine — Reasoning box", () => {
     ]);
 
     // One entry per wrapped line — the UI's appendTranscriptEntry merges the
-    // consecutive delta entries into a single thinking bubble.
+    // consecutive delta entries into a single thinking bubble. The chain head
+    // must itself be a delta: appendTranscriptEntry refuses to merge into a
+    // non-delta entry, so a `delta: false` first line would split every box
+    // into two bubbles.
     expect(entries).toHaveLength(3);
-    expect(entries.every((e) => e.kind === "thinking" && e.delta === true)).toBe(true);
+    expect(entries.map((e) => e.delta)).toEqual([true, true, true]);
     expect(entries.map((e) => e.text)).toEqual(["alpha\n", "beta\n", "gamma\n"]);
     // No separator is lost when the UI concatenates delta text.
     expect(coalescedThinkingText(entries)).toBe("alpha\nbeta\ngamma\n");
+  });
+
+  it("keeps two adjacent boxes in one thinking chain", () => {
+    const parser = createStdoutParser();
+    const entries = parseChunks(parser, [
+      `${reasoningBorder()}\n`,
+      " first box body\n",
+      " first box tail\n",
+      `${closingBorder()}\n`,
+      `${reasoningBorder()}\n`,
+      " second box body\n",
+      `${closingBorder()}\n`,
+    ]);
+
+    // No assistant entry separates the boxes, and the delta contract cannot
+    // start a new segment within one kind — the second box's lines stay in the
+    // same coalescable chain as the first. That renders as a single bubble
+    // holding both boxes' reasoning; fragmenting each box in two (a non-delta
+    // chain head) would be worse. Reasoning boxes are normally separated by
+    // the model's answer text, which does start a fresh region.
+    expect(entries.map((e) => e.kind)).toEqual(["thinking", "thinking", "thinking"]);
+    expect(entries.map((e) => e.delta)).toEqual([true, true, true]);
+    expect(entries[2]?.text).toContain("second box body");
+    expect(coalescedThinkingText(entries)).toBe(
+      "first box body\nfirst box tail\nsecond box body\n",
+    );
   });
 
   it("emits nothing for a standalone opening or closing border", () => {
