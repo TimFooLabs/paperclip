@@ -7,7 +7,7 @@ import { errorHandler } from "../middleware/error-handler.js";
 import { emailRoutes } from "../routes/email.js";
 import type { EmailChannelService } from "../services/email-channels.js";
 
-const mocks = vi.hoisted(() => ({ credential: vi.fn(), listCredentials: vi.fn(), requireEnabled: vi.fn(), permission: vi.fn() }));
+const mocks = vi.hoisted(() => ({ credential: vi.fn(), listCredentials: vi.fn(), permission: vi.fn() }));
 vi.mock("../services/email-connections.js", () => ({ emailConnectionService: () => ({ credential: mocks.credential, listCredentials: mocks.listCredentials }) }));
 vi.mock("../services/access.js", () => ({ accessService: () => ({ hasPermission: mocks.permission }) }));
 const companyId = "11111111-1111-4111-8111-111111111111";
@@ -18,19 +18,18 @@ function app(actor = { type: "board", source: "local_implicit", userId: "board" 
   const instance = express();
   instance.use(express.json());
   instance.use((req, _res, next) => { req.actor = actor; next(); });
-  instance.use("/api", emailRoutes({} as Db, { requireEnabled: mocks.requireEnabled } as unknown as EmailChannelService));
+  instance.use("/api", emailRoutes({} as Db, {} as EmailChannelService));
   instance.use(errorHandler);
   return instance;
 }
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.credential.mockResolvedValue({ value: "private-key" });
-  mocks.requireEnabled.mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ inboxes: [{ inbox_id: "ralph@agentmail.to" }] })));
 });
 afterEach(() => vi.unstubAllGlobals());
 describe("AgentMail address checks", () => {
-  it("lists saved-key metadata with company, manager and feature gates", async () => {
+  it("lists saved-key metadata with company and manager access checks", async () => {
     const listPath = `/api/companies/${companyId}/email/connections`;
     mocks.listCredentials.mockResolvedValue([{ id: connectionId, label: "AgentMail account key", scope: "organization" }]);
     const response = await request(app()).get(listPath).expect(200);
@@ -40,8 +39,6 @@ describe("AgentMail address checks", () => {
     await request(app({ type: "agent", agentId: connectionId, companyId })).get(listPath).expect(403);
     await request(app({ type: "board", source: "session", userId: "member", companyIds: [] })).get(listPath).expect(404);
     await request(app({ type: "board", source: "session", userId: "member", companyIds: [companyId] })).get(listPath).expect(403);
-    mocks.requireEnabled.mockRejectedValueOnce(forbidden("Disabled"));
-    await request(app()).get(listPath).expect(403);
     expect(mocks.listCredentials).not.toHaveBeenCalled();
   });
   it("uses the company-scoped saved credential and returns only address status", async () => {
@@ -71,10 +68,7 @@ describe("AgentMail address checks", () => {
     await request(app({ type: "board", source: "session", userId: "member", companyIds: [companyId] })).post(path).send(input).expect(403);
     expect(mocks.credential).not.toHaveBeenCalled();
   });
-  it("preserves feature and credential access gates", async () => {
-    mocks.requireEnabled.mockRejectedValueOnce(forbidden("Chat connectors are disabled"));
-    await request(app()).post(path).send(input).expect(403);
-    expect(mocks.credential).not.toHaveBeenCalled();
+  it("preserves credential access checks", async () => {
     mocks.credential.mockRejectedValueOnce(forbidden("Credential access denied"));
     await request(app()).post(path).send(input).expect(403);
     expect(fetch).not.toHaveBeenCalled();

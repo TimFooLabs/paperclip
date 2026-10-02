@@ -352,17 +352,20 @@ describe("Connectors landing page", () => {
 
   it("defaults to tools-only GitHub and hides chat-only catalog and existing chat accounts", async () => {
     experimentalMock.mockResolvedValue({});
-    listGalleryMock.mockResolvedValue({ apps: ["github", "github-code-review-bot", "discord", "telegram", "microsoft-teams"].map(getAppStoreDefinition) });
+    listGalleryMock.mockResolvedValue({ apps: ["agentmail", "github", "github-code-review-bot", "discord", "telegram", "microsoft-teams"].map(getAppStoreDefinition) });
     listApplicationsMock.mockResolvedValue({ applications: [application({
       id: "chat-app", type: "chat", name: "Private bot", applicationKey: "chat:github:endpoint-1", metadata: { purpose: "channel" },
     })] });
     await renderBrowse();
-    expect(chatListMock).not.toHaveBeenCalled();
+    expect(chatListMock).toHaveBeenCalledWith("company-1");
     expect(container.querySelector('[data-app-slug="github"]')).not.toBeNull();
     for (const slug of ["github-code-review-bot", "discord", "telegram", "microsoft-teams", "slack"]) {
       expect(container.querySelector(`[data-app-slug="${slug}"]`)).toBeNull();
     }
     expect(container.textContent).not.toContain("Private bot");
+    expect(container.querySelector('[data-app-slug="agentmail"]')).not.toBeNull();
+    await act(() => void container.querySelector<HTMLButtonElement>('button[aria-label="Connect AgentMail"]')!.click());
+    expect(navigateMock.mock.lastCall?.[0]).toContain("/apps/chat/connect?provider=agentmail");
     expect(container.textContent).not.toContain("Chat with agents");
     await act(() => void container.querySelector<HTMLButtonElement>('button[aria-label="Add key GitHub"]')!.click());
     expect(navigateMock).toHaveBeenLastCalledWith("/apps/connect?source=github");
@@ -463,6 +466,7 @@ describe("Connectors landing page", () => {
         ),
       ).map((row) => row.dataset.appSlug),
     ).toEqual([
+      "agentmail",
       "discord",
       "github-code-review-bot",
       "imessage-photon",

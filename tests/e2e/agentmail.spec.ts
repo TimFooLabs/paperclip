@@ -13,6 +13,10 @@ test("AgentMail setup and email work through the normal task conversation", asyn
   request,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1080 });
+  const settings = await request.patch("/api/instance/settings/experimental", {
+    data: { enableChatConnectors: false },
+  });
+  expect(settings.ok()).toBeTruthy();
   const created = await request.post("/api/companies", {
     data: { name: `AgentMail browser ${Date.now()}` },
   });
@@ -85,7 +89,7 @@ test("AgentMail setup and email work through the normal task conversation", asyn
     publications: [] as any[],
   };
   await page.route("**/api/instance/settings/experimental", (route) =>
-    fulfill(route, { enableChatConnectors: true }),
+    fulfill(route, { enableChatConnectors: false }),
   );
   await page.route(`**/api/companies/${company.id}/tools/connections`, route =>
     fulfill(route, { connections: [{

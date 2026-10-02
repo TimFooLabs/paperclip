@@ -1,7 +1,7 @@
 # AgentMail email connections
 
-AgentMail is an experimental **channel** connection. Enable experimental chat
-connections and open Apps → AgentMail. Setup has two steps: pick the agent, then
+AgentMail is a default **channel** connection. Open Connectors → AgentMail;
+no experimental setting is required. Setup has two steps: pick the agent, then
 pick its email address and create it. For a new connection, the first step also
 suggests an accessible saved AgentMail account key, or asks for a new API key.
 New credentials default to company-wide human access and only the selected agent.

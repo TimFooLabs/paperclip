@@ -231,7 +231,7 @@ function connectorAction(
   title?: string;
 } {
   const applicationId = row.applications[0]?.id ?? null;
-  const chatHref = chatConnectorsEnabled
+  const chatHref = (row.slug === "agentmail" || chatConnectorsEnabled)
     ? chatConnectHref(
         row.slug,
         row.entry ? connectHrefFor(row.entry) : null,
@@ -330,7 +330,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
   const chatEndpointsQuery = useQuery({
     queryKey: queryKeys.chatEndpoints.list(selectedCompanyId ?? "__none__"),
     queryFn: () => chatEndpointsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId && chatConnectorsEnabled,
+    enabled: !!selectedCompanyId,
   });
   const userDirectoryQuery = useQuery({
     queryKey: queryKeys.access.companyUserDirectory(
@@ -391,7 +391,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
     if (!memoryConnectorsEnabled && isMemoryConnectorId(appDefinitionSlug(entry))) return false;
     const definition = getAppStoreDefinition(appDefinitionSlug(entry));
     return (
-      chatConnectorsEnabled ||
+      appDefinitionSlug(entry) === "agentmail" || chatConnectorsEnabled ||
       !definition?.methods.some((method) => method.purpose === "channel") ||
       appSupportsToolCatalogSetup(definition)
     );
@@ -440,7 +440,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
         slug,
         name: appDefinitionName(entry),
         description:
-          !chatConnectorsEnabled && chatProviderForSlug(slug)
+          !chatConnectorsEnabled && slug !== "agentmail" && chatProviderForSlug(slug)
             ? appCopyFor(slug).tagline
             : appDefinitionDescription(entry),
         brandKey: slug,
@@ -453,6 +453,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
       });
     }
     const nativeChatApps = [
+      { slug: "agentmail", name: "AgentMail", description: "Give agents email inboxes and handle each conversation as a task." },
       { slug: "imessage-photon", name: "iMessage Photon", description: "Message agents and share photos from Apple Messages with a dedicated Photon number." },
       {
         slug: "slack",
@@ -484,7 +485,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
           "Chat with agents from Telegram direct messages, groups, and topics.",
       },
     ] as const;
-    for (const item of chatConnectorsEnabled ? nativeChatApps : []) {
+    for (const item of nativeChatApps.filter(item => item.slug === "agentmail" || chatConnectorsEnabled)) {
       if (rowsBySlug.has(item.slug)) continue;
       rowsBySlug.set(item.slug, {
         key: `native-chat:${item.slug}`,
@@ -567,9 +568,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
       });
     }
 
-    for (const endpoint of chatConnectorsEnabled
-      ? (chatEndpointsQuery.data ?? [])
-      : []) {
+    for (const endpoint of (chatEndpointsQuery.data ?? []).filter(endpoint => endpoint.provider === "agentmail" || chatConnectorsEnabled)) {
       if (endpoint.status === "archived") continue;
       let target = [...rowsBySlug.values()].find(
         (row) => chatProviderForSlug(row.slug) === endpoint.provider,
@@ -658,12 +657,12 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
     galleryQuery.isLoading ||
     applicationsQuery.isLoading ||
     connectionsQuery.isLoading ||
-    (chatConnectorsEnabled && chatEndpointsQuery.isLoading);
+    chatEndpointsQuery.isLoading;
   const loadFailed =
     galleryQuery.isError ||
     applicationsQuery.isError ||
     connectionsQuery.isError ||
-    (chatConnectorsEnabled && chatEndpointsQuery.isError);
+    chatEndpointsQuery.isError;
   const nothingMatches = visibleRows.length === 0 && !showCustomConnector;
 
   return (
@@ -700,7 +699,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
               void galleryQuery.refetch();
               void applicationsQuery.refetch();
               void connectionsQuery.refetch();
-              if (chatConnectorsEnabled) void chatEndpointsQuery.refetch();
+              void chatEndpointsQuery.refetch();
             }}
           >
             Try again

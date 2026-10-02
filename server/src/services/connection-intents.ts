@@ -337,8 +337,7 @@ export function connectionIntentService(db: Db) {
     if (!service.startsWith("connection:")) {
       const app = getAppStoreDefinition(service);
       if (!app) throw notFound("Connection service was not found");
-      if (purpose === "channel" && (service !== "agentmail"
-        || !(await instanceSettingsService(db).getExperimental()).enableChatConnectors)) {
+      if (purpose === "channel" && service !== "agentmail") {
         throw unprocessable("This email connection is not available");
       }
       const methods = purpose === "ai" ? getAvailableConnectionMethods(app).filter(method => method.transport === "runtime_auth")
@@ -385,7 +384,7 @@ export function connectionIntentService(db: Db) {
     const candidates: Array<{ item: ConnectionSearchResultItem; score: number; nameScore: number }> = [];
     const authorizedCatalogs = new Map<string, Awaited<ReturnType<typeof indexedCatalog>>>();
     const discoveryMethods = (app: (typeof APP_STORE_DEFINITIONS)[number]) => getAvailableConnectionMethods(app)
-      .filter(method => method.purpose !== "channel" || settings.enableChatConnectors);
+      .filter(method => method.purpose !== "channel" || app.slug === "agentmail" || settings.enableChatConnectors);
     const services = [...APP_STORE_DEFINITIONS.filter(app => discoveryMethods(app).length).map((app) => app.slug),
       ...inventory.connections.filter((connection) =>
         sourceSlugForConnection(connection, inventory.applicationsById)?.startsWith("connection:")

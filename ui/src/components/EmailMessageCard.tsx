@@ -8,7 +8,6 @@ import type {
 } from "@paperclipai/shared";
 import { emailApi } from "@/api/email";
 import { issuesApi } from "@/api/issues";
-import { useChatConnectorsEnabled } from "@/hooks/useChatConnectorsEnabled";
 const EmailContext = createContext<EmailThreadSummary | null>(null);
 export function EmailThreadProvider({
   companyId,
@@ -19,12 +18,11 @@ export function EmailThreadProvider({
   issueId: string;
   children: ReactNode;
 }) {
-  const { enabled } = useChatConnectorsEnabled();
   const thread = useQuery({
     queryKey: ["email-thread", companyId, issueId],
     queryFn: () => emailApi.thread(companyId, issueId),
-    enabled,
-    refetchInterval: enabled ? 3000 : false,
+    enabled: Boolean(companyId && issueId),
+    refetchInterval: 3000,
   });
   return (
     <EmailContext.Provider value={thread.data ?? null}>
