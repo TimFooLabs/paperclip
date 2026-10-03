@@ -2,7 +2,7 @@ import vm from "node:vm";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { invalidateDynamicParser, loadDynamicParser } from "./dynamic-loader";
+import { invalidateDynamicParser, loadDynamicParser, setDynamicParserResultNotifier } from "./dynamic-loader";
 import { getWorkerBootstrapSource } from "./sandboxed-parser-worker";
 import { buildTranscript, type RunLogChunk } from "./transcript";
 import type { StdoutLineParser, StdoutParserFactory } from "./types";
@@ -111,16 +111,37 @@ async function loadStatefulParser(
 }
 
 /** Wait until every parse request sent so far has been answered. */
-async function settle() {
-  await vi.waitFor(() => {
-    expect(currentWorker?.replies ?? 0).toBeGreaterThanOrEqual(currentWorker?.parseRequests ?? 0);
+async function settle(timeout = 5_000) {
+  await vi.waitFor(
+    () => {
+      expect(currentWorker?.replies ?? 0).toBeGreaterThanOrEqual(currentWorker?.parseRequests ?? 0);
+    },
+    { timeout },
+  );
+}
+
+/** Count of transcript recomputes the loader asked for since it was reset. */
+let recomputes = 0;
+
+function countRecomputes() {
+  recomputes = 0;
+  setDynamicParserResultNotifier(() => {
+    recomputes += 1;
   });
 }
 
 describe("dynamic loader — stateful parsers across transcript rebuilds", () => {
   afterEach(() => {
+    setDynamicParserResultNotifier(null);
     if (currentWorker) {
-      for (const type of ["fake-adapter-settle", "fake-adapter-borders", "fake-adapter-transcript"]) {
+      for (const type of [
+        "fake-adapter-settle",
+        "fake-adapter-borders",
+        "fake-adapter-transcript",
+        "fake-adapter-pending",
+        "fake-adapter-reclassify",
+        "fake-adapter-large",
+      ]) {
         invalidateDynamicParser(type);
       }
       currentWorker = null;
@@ -190,5 +211,113 @@ describe("dynamic loader — stateful parsers across transcript rebuilds", () =>
     // The rebuild the UI runs once results arrive must show the parsed kinds.
     const second = buildTranscript(chunks, parserModule);
     expect(second.map((entry) => entry.kind)).toEqual(["thinking", "assistant"]);
+  });
+
+  it("does not let a previous build's pending border swallow this build's border request", async () => {
+    const parserModule = await loadStatefulParser("fake-adapter-pending");
+
+    // Build 1 sends the opening border and stops there, so the request is
+    // still in flight.
+    const first = parserModule.createStdoutParser();
+    first.parseLine(LINES[0]!, "t1");
+    expect(currentWorker?.parseRequests).toBe(1);
+
+    // Build 2 starts before build 1's request is answered. Its border request
+    // must still reach the worker: the worker builds a fresh parser for this
+    // build id, and a border that never reaches it leaves the whole box
+    // classified as assistant output.
+    const second = parserModule.createStdoutParser();
+    second.parseLine(LINES[0]!, "t1");
+    expect(currentWorker?.parseRequests).toBe(2);
+    second.parseLine(LINES[1]!, "t1");
+    expect(currentWorker?.parseRequests).toBe(3);
+    second.reset?.();
+
+    await settle();
+
+    // The next build renders the box the way build 2's complete feed
+    // classified it, which is only true if build 2 fed the border.
+    const third = parserModule.createStdoutParser();
+    expect(third.parseLine(LINES[0]!, "t1")).toEqual([]);
+    expect(third.parseLine(LINES[1]!, "t1")).toEqual([
+      { kind: "thinking", ts: "t1", text: LINES[1], delta: true },
+    ]);
+    third.reset?.();
+  });
+
+  it("reclassifies a body line whose border was truncated in the previous build", async () => {
+    const parserModule = await loadStatefulParser("fake-adapter-reclassify");
+
+    // Warm the cache on a build whose border line was cut off mid-chunk, so it
+    // is not a border at all and the body line that follows is assistant text.
+    const truncated = lineChunks(["plain", LINES[1]!], "t1");
+    buildTranscript(truncated, parserModule);
+    await settle();
+    countRecomputes();
+
+    expect(buildTranscript(truncated, parserModule).map((entry) => entry.kind)).toEqual([
+      "assistant",
+      "assistant",
+    ]);
+    expect(recomputes).toBe(0);
+    countRecomputes();
+
+    // Replacing that chunk with a complete border leaves the body line with the
+    // same position, timestamp, and text — so it is still a cache hit and still
+    // returns the assistant classification it already had — but the worker now
+    // classifies it as thinking, and that difference must be reported.
+    const complete = lineChunks([LINES[0]!, LINES[1]!], "t1");
+    expect(buildTranscript(complete, parserModule).map((entry) => entry.kind)).toEqual(["assistant"]);
+
+    await settle();
+    expect(recomputes).toBeGreaterThan(0);
+    countRecomputes();
+
+    // The rebuild the correction triggered sees the reclassified line.
+    expect(buildTranscript(complete, parserModule).map((entry) => entry.kind)).toEqual(["thinking"]);
+
+    // And the corrected cache agrees with the worker, so nothing re-fires.
+    await settle();
+    countRecomputes();
+    buildTranscript(complete, parserModule);
+    expect(recomputes).toBe(0);
+  });
+
+  it("keeps a transcript longer than the old cache bound settled across rebuilds", async () => {
+    const parserModule = await loadStatefulParser("fake-adapter-large");
+    countRecomputes();
+
+    // 3,000 Reasoning boxes: 9,000 parsed occurrences, more than the 8,192
+    // entry bound the cache used to clear itself at.
+    const boxes: string[] = [];
+    for (let index = 0; index < 3000; index += 1) {
+      boxes.push(LINES[0]!, ` wrapped thought ${index}`, LINES[2]!);
+    }
+    const chunks = lineChunks(boxes, "2026-06-29T12:00:00.000Z");
+
+    buildTranscript(chunks, parserModule);
+    await settle(60_000);
+
+    // Two back-to-back rebuilds with no worker round trip between them — the
+    // shape a scroll or a streaming tick produces. Waiting for the worker here
+    // would mask the bug: the resolutions from the previous build land after
+    // its reset and refill the cleared cache, so the next build looks served
+    // from cache when it is not. The reset at the end of the first rebuild
+    // must not wipe that build's entries, or the second misses all 9,000 lines
+    // and renders the raw stream again — then refills, then clears, forever.
+    const rebuild = buildTranscript(chunks, parserModule);
+    expect(rebuild.length).toBeGreaterThan(0);
+    expect(rebuild.some((entry) => entry.kind !== "thinking")).toBe(false);
+
+    const again = buildTranscript(chunks, parserModule);
+    expect(again.length).toBe(rebuild.length);
+    expect(again.some((entry) => entry.kind !== "thinking")).toBe(false);
+
+    // And once settled it stays settled: no further rebuild is scheduled.
+    await settle(60_000);
+    countRecomputes();
+    buildTranscript(chunks, parserModule);
+    await settle(60_000);
+    expect(recomputes).toBe(0);
   });
 });
