@@ -85,6 +85,22 @@ function notifyResultReady(): void {
 }
 
 /**
+ * Whether a fresh worker result still matches the result already handed to the
+ * transcript. Both sides are plain postMessage-cloned data produced by the same
+ * parser source, so a serialised compare is sufficient — and `TranscriptEntry`
+ * variants nest deeply (tool payloads, workspace file lists), so a shallow
+ * compare would report differences that are not there.
+ */
+function sameEntries(a: TranscriptEntry[] | undefined, b: TranscriptEntry[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (JSON.stringify(a[index]) !== JSON.stringify(b[index])) return false;
+  }
+  return true;
+}
+
+/**
  * Parse a single line synchronously by delegating to the worker.
  * Returns a Promise that resolves with the TranscriptEntry[] from the worker.
  *
@@ -205,16 +221,40 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
    */
   let lastBuildId = 0;
 
-  /** Upper bound on cached results; {@link createStdoutParser} reset trims. */
+  /**
+   * Cache keys fed by the build in progress. `reset` keeps these and evicts
+   * everything else, so the bound never discards the working set the next
+   * build needs.
+   */
+  let activeBuildKeys = new Set<string>();
+
+  /** Upper bound on cached results from older builds; {@link createStdoutParser} reset trims. */
   const MAX_PARSE_CACHE_ENTRIES = 8192;
 
-  const requestParse = (key: string, buildId: number | undefined, line: string, ts: string, notify: boolean) => {
-    if (pendingParseKeys.has(key)) return;
-    pendingParseKeys.add(key);
+  const requestParse = (
+    key: string,
+    buildId: number | undefined,
+    line: string,
+    ts: string,
+    previous: TranscriptEntry[] | undefined,
+  ) => {
+    // Pending requests are scoped to the build that issued them. The cache key
+    // repeats across builds (the ordinal restarts at 0), so a shared set would
+    // let one build's in-flight request swallow the next build's request for
+    // the same line — and a border line that never reaches the fresh worker
+    // parser leaves the whole Reasoning box classified as plain output.
+    const pendingKey = buildId === undefined ? `shared ${key}` : `${buildId} ${key}`;
+    if (pendingParseKeys.has(pendingKey)) return;
+    pendingParseKeys.add(pendingKey);
     parseLineAsync(sandbox, line, ts, buildId).then((entries) => {
-      pendingParseKeys.delete(key);
+      pendingParseKeys.delete(pendingKey);
       parseCache.set(key, entries);
-      if (notify) notifyResultReady();
+      // Notify only when the result actually moved: a miss notifies (no
+      // previous result), and so does a hit whose re-parse corrected the
+      // cached classification — e.g. a truncated Reasoning border replaced by
+      // a complete one. A hit that agrees stays silent, so a settled
+      // transcript does not schedule rebuild after rebuild.
+      if (!sameEntries(previous, entries)) notifyResultReady();
     });
   };
 
@@ -227,7 +267,7 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
     const cached = parseCache.get(key);
     if (cached) return cached.slice();
 
-    requestParse(key, undefined, line, ts, true);
+    requestParse(key, undefined, line, ts, cached);
     return [];
   };
 
@@ -245,7 +285,8 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
    *
    * Cached lines are still forwarded to the worker — a stateful parser must
    * observe every line in order, so the cache only avoids recomputing the
-   * *result*, never the feed. Only misses trigger a transcript recompute.
+   * *result*, never the feed. Only a re-parse that disagrees with the cached
+   * result triggers a transcript recompute.
    */
   const createStdoutParser: StdoutParserFactory = () => {
     const buildId = ++lastBuildId;
@@ -255,15 +296,30 @@ function buildParserModule(sandbox: SandboxedParser): DynamicParserModule {
       parseLine: (line: string, ts: string) => {
         const key = `${ordinal++}\u0000${lineCacheKey(line, ts)}`;
         const cached = parseCache.get(key);
+        activeBuildKeys.add(key);
         // Feed the worker even on a hit; return the known result immediately.
-        requestParse(key, buildId, line, ts, !cached);
+        requestParse(key, buildId, line, ts, cached);
         return cached ? cached.slice() : [];
       },
       reset: () => {
-        // buildTranscript resets when a build ends. Entries must survive so
-        // the next build — a fresh worker parser over the same lines — hits
-        // them; only trim once the cache grows past its bound.
-        if (parseCache.size > MAX_PARSE_CACHE_ENTRIES) parseCache.clear();
+        // buildTranscript resets when a build ends. This build's entries must
+        // survive so the next build — a fresh worker parser over the same
+        // lines — hits them, so the bound is enforced by evicting entries from
+        // *older* builds, oldest first. Trimming this build's own working set
+        // instead would make a transcript larger than the bound re-miss a
+        // rotating window of its earliest lines on every rebuild: those
+        // re-insert at the tail, so the next reset evicts a different window
+        // and the transcript never settles.
+        if (parseCache.size > MAX_PARSE_CACHE_ENTRIES) {
+          let excess = parseCache.size - MAX_PARSE_CACHE_ENTRIES;
+          for (const key of parseCache.keys()) {
+            if (excess <= 0) break;
+            if (activeBuildKeys.has(key)) continue;
+            parseCache.delete(key);
+            excess -= 1;
+          }
+        }
+        activeBuildKeys = new Set();
       },
     };
   };
