@@ -436,8 +436,12 @@ export async function execute(
   }
 
   // ── Build command args ─────────────────────────────────────────────────
-  // Use -Q (quiet) to get clean output: just response + session_id line
-  const useQuiet = cfgBoolean(config.quiet) === true; // default false
+  // Use -Q (quiet) to get clean output: just response + session_id line.
+  // Quiet is the default: agents run non-interactively, and hermes' non-quiet
+  // path echoes the prompt through Rich markup unescaped, so prompt content like
+  // `[guide](/issues/TIM-57)` raises rich.errors.MarkupError and the run exits 1.
+  // Opt out explicitly with quiet: false.
+  const useQuiet = cfgBoolean(config.quiet) !== false; // default true
   const args: string[] = ["chat", "-q", prompt];
   if (useQuiet) args.push("-Q");
 
