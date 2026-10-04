@@ -39,6 +39,15 @@ services:
 
       # ── Required secret for session signing (generate with: openssl rand -hex 32) ──
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+    healthcheck:
+      # In-container probe. No published port is required. The image installs
+      # curl in the base stage and ships PORT=3100. The API answers /api/health
+      # with 200 JSON once the listener and the instance bootstrap are ready.
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:${PORT:-3100}/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     volumes:
       # Persistent data directory (database, agent workspaces, uploads)
       - "${PAPERCLIP_DATA_DIR:-../data/docker-paperclip}:/paperclip"
