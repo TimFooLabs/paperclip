@@ -87,7 +87,13 @@ export type {
   RuntimeStatusSink,
   RuntimeStatusUpdate,
 } from "./runtime-progress.js";
-export { inferOpenAiCompatibleBiller } from "./billing.js";
+export {
+  inferOpenAiCompatibleBiller,
+  isZaiApiBaseUrl,
+  looksLikeGlmModel,
+  resolveZaiSubscriptionRoute,
+  type ZaiSubscriptionRouteInput,
+} from "./billing.js";
 export {
   ADAPTER_LOGIN_PANEL_MODES,
   ADAPTER_LOGIN_TIMEOUT_POLICIES,

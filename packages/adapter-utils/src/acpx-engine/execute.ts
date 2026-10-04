@@ -259,6 +259,13 @@ export interface AcpxEngineBillingIdentity {
   provider?: string | null;
   biller?: string | null;
   billingType?: AdapterBillingType | null;
+  /**
+   * The route reports synthetic pricing-table `cost` figures even though usage
+   * is covered by a subscription (e.g. a Z.ai-hosted GLM model behind the
+   * Anthropic API shape). The engine then records 0 billed cost for the turn
+   * instead of the provider's estimate; the cumulative diagnostic stays intact.
+   */
+  zeroReportedCostUsd?: boolean;
 }
 
 /**
@@ -3873,6 +3880,10 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       ...(billingIdentity?.biller ? { biller: billingIdentity.biller } : {}),
       billingType: billingIdentity?.billingType ?? ("unknown" as const),
     };
+    // Subscription-covered routes owe $0 per turn. Keep the cumulative figure
+    // in resultJson for inspection; the billed field is the authoritative one.
+    const resolveBilledCostUsd = (turnCostUsd: number | null): number | null =>
+      billingIdentity?.zeroReportedCostUsd ? 0 : turnCostUsd;
     const warmIdleMs = asNumber(ctx.config.warmHandleIdleMs, DEFAULT_ACP_ENGINE_WARM_HANDLE_IDLE_MS);
     // The host run site owns the warm-handle store on this run. It operates over
     // the engine's persistent `warmHandles` map, so a warm runtime stays live for
@@ -5060,7 +5071,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           ...referencedProjectStagingFailuresField,
           model: prepared.requestedModel || null,
           ...(turnUsage.usage ? { usage: turnUsage.usage, usageBasis: "per_run" as const } : {}),
-          costUsd: turnUsage.costUsd,
+          costUsd: resolveBilledCostUsd(turnUsage.costUsd),
           resultJson: {
             status: channelLost ? "failed" : terminal.status,
             ...activityDiagnostics,

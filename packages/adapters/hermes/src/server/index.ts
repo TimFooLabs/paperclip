@@ -7,6 +7,11 @@ export { testEnvironment } from "./test.js";
 export { detectModel, parseModelFromConfig, resolveProvider, inferProviderFromModel } from "./detect-model.js";
 export { getConfigSchema } from "./config-schema.js";
 export {
+  resolveHermesBillingIdentity,
+  resolveHermesBilledCostUsd,
+  type HermesBillingIdentity,
+} from "./billing.js";
+export {
   listHermesSkills as listSkills,
   syncHermesSkills as syncSkills,
   resolveHermesDesiredSkillNames as resolveDesiredSkillNames,

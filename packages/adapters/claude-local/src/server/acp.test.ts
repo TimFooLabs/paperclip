@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createPromptContextFixture } from "@paperclipai/adapter-utils/test-fixtures/prompt-context";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdapterExecutionContext, AdapterInvocationMeta } from "@paperclipai/adapter-utils";
 import { runChildProcess } from "@paperclipai/adapter-utils/server-utils";
 
@@ -269,6 +269,13 @@ function buildContext(root: string, overrides: Partial<AdapterExecutionContext> 
 
 describe("claude_local ACP lane", () => {
   it("uses the same default model in ACP startup and session identity", async () => {
+    // Assert the adapter's own default, not whatever model the host runner
+    // happens to export (agents here often run behind ANTHROPIC_MODEL).
+    const originalHostModel = process.env.ANTHROPIC_MODEL;
+    const originalHostBaseUrl = process.env.ANTHROPIC_BASE_URL;
+    delete process.env.ANTHROPIC_MODEL;
+    delete process.env.ANTHROPIC_BASE_URL;
+    try {
     const root = await makeTempRoot("paperclip-claude-acp-default-");
     const meta: AdapterInvocationMeta[] = [];
     const execute = createClaudeAcpExecutor({
@@ -279,6 +286,12 @@ describe("claude_local ACP lane", () => {
     }));
     expect(result.exitCode).toBe(0);
     expect(meta[0]?.env?.ANTHROPIC_MODEL).toBe("claude-opus-5");
+    } finally {
+      if (originalHostModel === undefined) delete process.env.ANTHROPIC_MODEL;
+      else process.env.ANTHROPIC_MODEL = originalHostModel;
+      if (originalHostBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = originalHostBaseUrl;
+    }
   });
 
   it("keeps ACP model precedence consistent with CLI and provider overrides", () => {
@@ -1512,6 +1525,23 @@ describe("resolveClaudeAcpBillingIdentity", () => {
   const originalApiKey = process.env.ANTHROPIC_API_KEY;
   const originalBedrock = process.env.CLAUDE_CODE_USE_BEDROCK;
   const originalBedrockBase = process.env.ANTHROPIC_BEDROCK_BASE_URL;
+  const originalBaseUrl = process.env.ANTHROPIC_BASE_URL;
+  const originalModel = process.env.ANTHROPIC_MODEL;
+
+  // Host env can carry a Z.ai route (agents running behind
+  // ANTHROPIC_BASE_URL=api.z.ai). Clear it per test so every case states the
+  // environment it means to exercise instead of inheriting the runner's.
+  beforeEach(() => {
+    for (const key of [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "ANTHROPIC_BEDROCK_BASE_URL",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_MODEL",
+    ]) {
+      delete process.env[key];
+    }
+  });
 
   afterEach(() => {
     if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
@@ -1520,18 +1550,32 @@ describe("resolveClaudeAcpBillingIdentity", () => {
     else process.env.CLAUDE_CODE_USE_BEDROCK = originalBedrock;
     if (originalBedrockBase === undefined) delete process.env.ANTHROPIC_BEDROCK_BASE_URL;
     else process.env.ANTHROPIC_BEDROCK_BASE_URL = originalBedrockBase;
+    if (originalBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+    else process.env.ANTHROPIC_BASE_URL = originalBaseUrl;
+    if (originalModel === undefined) delete process.env.ANTHROPIC_MODEL;
+    else process.env.ANTHROPIC_MODEL = originalModel;
   });
 
   it("classifies an adapter-config API key as api billing", () => {
     expect(
       resolveClaudeAcpBillingIdentity({ config: { env: { ANTHROPIC_API_KEY: "sk-ant-test" } } }),
-    ).toEqual({ provider: "anthropic", biller: "anthropic", billingType: "api" });
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "api",
+      zeroReportedCostUsd: false,
+    });
   });
 
   it("classifies Bedrock auth as metered_api billed to aws_bedrock", () => {
     expect(
       resolveClaudeAcpBillingIdentity({ config: { env: { CLAUDE_CODE_USE_BEDROCK: "1" } } }),
-    ).toEqual({ provider: "anthropic", biller: "aws_bedrock", billingType: "metered_api" });
+    ).toEqual({
+      provider: "anthropic",
+      biller: "aws_bedrock",
+      billingType: "metered_api",
+      zeroReportedCostUsd: false,
+    });
   });
 
   it("falls back to subscription without API-key or Bedrock auth", () => {
@@ -1542,6 +1586,7 @@ describe("resolveClaudeAcpBillingIdentity", () => {
       provider: "anthropic",
       biller: "anthropic",
       billingType: "subscription",
+      zeroReportedCostUsd: false,
     });
   });
 
@@ -1553,5 +1598,110 @@ describe("resolveClaudeAcpBillingIdentity", () => {
         executionTarget: { kind: "remote", transport: "sandbox", remoteCwd: "/work" },
       } as never).billingType,
     ).toBe("subscription");
+  });
+
+  it("classifies a Z.ai base URL with an auth token as a zero-cost subscription route", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: {
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+            ANTHROPIC_AUTH_TOKEN: "zai-test",
+            ANTHROPIC_MODEL: "glm-5.3-flash",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "subscription",
+      zeroReportedCostUsd: true,
+    });
+  });
+
+  it("keeps the Z.ai route subscription even when an API key is present", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: {
+          env: {
+            ANTHROPIC_BASE_URL: "api.z.ai/api/anthropic",
+            ANTHROPIC_API_KEY: "zai-test",
+          },
+          model: "glm-4.7",
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "subscription",
+      zeroReportedCostUsd: true,
+    });
+  });
+
+  it("treats a GLM model on the Anthropic route as a Z.ai subscription without a base URL", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: { model: "glm-5.3-flash" },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "subscription",
+      zeroReportedCostUsd: true,
+    });
+  });
+
+  it("does not zero cost for non-Z.ai Anthropic routes", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: {
+          env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" },
+          model: "claude-sonnet-4-5",
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "subscription",
+      zeroReportedCostUsd: false,
+    });
+  });
+
+  it("keeps API-key billing on a non-Z.ai base URL", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: {
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+            ANTHROPIC_API_KEY: "sk-ant-test",
+          },
+          model: "claude-sonnet-4-5",
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "api",
+      zeroReportedCostUsd: false,
+    });
+  });
+
+  it("prefers the config model over ANTHROPIC_MODEL when both are set", () => {
+    expect(
+      resolveClaudeAcpBillingIdentity({
+        config: {
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+            ANTHROPIC_MODEL: "glm-5.3-flash",
+          },
+          model: "claude-sonnet-4-5",
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      biller: "anthropic",
+      billingType: "subscription",
+      zeroReportedCostUsd: false,
+    });
   });
 });
