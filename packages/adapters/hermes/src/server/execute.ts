@@ -28,6 +28,11 @@ import type {
 } from "@paperclipai/adapter-utils";
 
 import {
+  resolveHermesBilledCostUsd,
+  resolveHermesBillingIdentity,
+} from "./billing.js";
+
+import {
   runChildProcess,
   buildPaperclipEnv,
   buildRuntimeToolsEnv,
@@ -402,6 +407,16 @@ export async function execute(
     model,
   });
 
+  // Z.ai subscription routes are plan-covered: the CLI still prints a dollar
+  // estimate, but that figure is a pricing-table synthetic, not money owed.
+  // Attribution only — this does not touch routing, retries, or fallbacks.
+  const billingIdentity = resolveHermesBillingIdentity({
+    baseUrl: detectedConfig?.baseUrl ?? cfgString(config.baseUrl),
+    provider: resolvedProvider,
+    model,
+  });
+  const { billingType, biller, zeroReportedCostUsd } = billingIdentity;
+
   // ── Load agent instructions file (Paperclip instruction bundles) ──────
   // Paperclip can materialize managed instructions into instructionsFilePath;
   // when present, inject that bundle into the Hermes prompt.
@@ -525,7 +540,7 @@ export async function execute(
   // ── Log start ──────────────────────────────────────────────────────────
   await ctx.onLog(
     "stdout",
-    `[hermes] Starting Hermes Agent (model=${model}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""})\n`,
+    `[hermes] Starting Hermes Agent (model=${model}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""}${zeroReportedCostUsd ? ", billing=subscription(zai)" : ""})\n`,
   );
   if (prevSessionId) {
     await ctx.onLog(
@@ -585,6 +600,8 @@ export async function execute(
     timedOut: result.timedOut,
     provider: resolvedProvider,
     model,
+    billingType,
+    ...(biller ? { biller } : {}),
   };
 
   if (parsed.errorMessage) {
@@ -598,7 +615,9 @@ export async function execute(
   }
 
   if (parsed.costUsd !== undefined) {
-    executionResult.costUsd = parsed.costUsd;
+    // The CLI's printed estimate is kept in resultJson for inspection; the
+    // billed field is the authoritative one and owes $0 on subscription routes.
+    executionResult.costUsd = resolveHermesBilledCostUsd(billingIdentity, parsed.costUsd);
   }
 
   // Summary from agent response
@@ -612,6 +631,7 @@ export async function execute(
     session_id: parsed.sessionId || null,
     usage: parsed.usage || null,
     cost_usd: parsed.costUsd ?? null,
+    billing_type: billingType,
   };
 
   // Store session ID for next run

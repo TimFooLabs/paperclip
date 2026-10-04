@@ -13,6 +13,7 @@ import {
   parseLocalProcessFilesystemScope,
   parseLocalProcessNetworkScope,
 } from "@paperclipai/adapter-utils/local-process-sandbox";
+import { resolveZaiSubscriptionRoute } from "@paperclipai/adapter-utils";
 import {
   ensureAdapterExecutionTargetCommandResolvable,
   ensureAdapterExecutionTargetDirectory,
@@ -165,8 +166,9 @@ export function buildClaudeAcpConfig(
 export function resolveClaudeAcpBillingIdentity(
   ctx: Pick<AdapterExecutionContext, "config"> &
     Partial<Pick<AdapterExecutionContext, "executionTarget" | "executionTransport">>,
-): { provider: string; biller: string; billingType: AdapterBillingType } {
+): { provider: string; biller: string; billingType: AdapterBillingType; zeroReportedCostUsd: boolean } {
   const envConfig = parseObject(parseObject(ctx.config).env);
+  const configModel = parseObject(ctx.config).model;
   const target = readAdapterExecutionTarget({
     executionTarget: ctx.executionTarget,
     legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
@@ -180,8 +182,21 @@ export function resolveClaudeAcpBillingIdentity(
   };
   const bedrockFlag = readEnvValue("CLAUDE_CODE_USE_BEDROCK");
   const bedrock = bedrockFlag === "1" || bedrockFlag === "true" || Boolean(readEnvValue("ANTHROPIC_BEDROCK_BASE_URL"));
+  const model = typeof configModel === "string" && configModel.trim()
+    ? configModel.trim()
+    : readEnvValue("ANTHROPIC_MODEL");
+  // Z.ai subscription routes (e.g. ANTHROPIC_BASE_URL=api.z.ai/api/anthropic with
+  // a GLM model) are plan-covered: the CLI still prices turns from Anthropic
+  // tables, so the reported cost is synthetic and must not reach the ledger.
+  const zaiSubscriptionRoute = resolveZaiSubscriptionRoute({
+    baseUrl: readEnvValue("ANTHROPIC_BASE_URL"),
+    provider: "anthropic",
+    model,
+  });
   const billingType: AdapterBillingType = bedrock
     ? "metered_api"
+    : zaiSubscriptionRoute
+    ? "subscription"
     : readEnvValue("ANTHROPIC_API_KEY")
     ? "api"
     : "subscription";
@@ -189,6 +204,7 @@ export function resolveClaudeAcpBillingIdentity(
     provider: "anthropic",
     biller: bedrock ? "aws_bedrock" : "anthropic",
     billingType,
+    zeroReportedCostUsd: !bedrock && zaiSubscriptionRoute,
   };
 }
 
