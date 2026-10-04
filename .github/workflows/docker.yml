@@ -88,13 +88,14 @@ jobs:
       # GHCR image names must be lowercase, and `${{ github.repository }}` is
       # `TimFooLabs/paperclip` on this fork — upstream `paperclipai/paperclip`
       # is lowercase by luck, which is why the build only broke here. Compute
-      # the lowercase name once and read it in every ghcr ref below: the push
+      # the lowercase name once — bare repo path, no registry host; every ghcr
+      # ref below adds the `ghcr.io/` prefix itself — and read it in the push
       # name, the registry buildcache refs, and the manifest merge. (The
       # promote_canary_channel job keeps `github.repository`: it only runs on
       # canary tags, which this fork does not publish.)
       - name: Compute lowercase image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       # `.git` is dockerignored, so a running image cannot derive its own
       # version and otherwise reports the source package.json placeholder in
@@ -300,11 +301,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Same as the build job: the fork's repository name has uppercase
-      # letters and every ghcr ref below must be lowercase.
+      # Same as the build job: bare lowercase repo path — the refs below all
+      # add their own `ghcr.io/` prefix.
       - name: Compute lowercase image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
