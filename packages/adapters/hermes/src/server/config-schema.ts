@@ -3,6 +3,8 @@ import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
 import {
   DEFAULT_GRACE_SEC,
   DEFAULT_TIMEOUT_SEC,
+  DEFAULT_OUTPUT_FORMAT,
+  HERMES_OUTPUT_FORMATS,
   VALID_PROVIDERS,
 } from "../shared/constants.js";
 
@@ -78,11 +80,25 @@ export function getConfigSchema(): AdapterConfigSchema {
         hint: "Pass Hermes --checkpoints.",
       },
       {
+        key: "outputFormat",
+        label: "Output format",
+        type: "select",
+        default: DEFAULT_OUTPUT_FORMAT,
+        options: HERMES_OUTPUT_FORMATS.map((format) => ({
+          value: format,
+          label:
+            format === "stream-json"
+              ? "Stream JSON (structured protocol)"
+              : "Plain text (legacy)",
+        })),
+        hint: "stream-json parses Hermes' JSONL event protocol. Plain text scrapes the human console output — use it only for a Hermes build that predates --format.",
+      },
+      {
         key: "quiet",
         label: "Quiet output",
         type: "toggle",
         default: true,
-        hint: "Pass Hermes --quiet for cleaner Paperclip run transcripts.",
+        hint: "Pass Hermes --quiet for cleaner Paperclip run transcripts. Stream JSON already implies quiet.",
       },
       {
         key: "verbose",
