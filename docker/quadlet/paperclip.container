@@ -14,6 +14,16 @@ Environment=PAPERCLIP_DEPLOYMENT_MODE=authenticated
 Environment=PAPERCLIP_DEPLOYMENT_EXPOSURE=private
 Environment=PAPERCLIP_PUBLIC_URL=http://localhost:3100
 EnvironmentFile=%h/.config/containers/systemd/paperclip.env
+# Mirrors the compose healthchecks and the ECS task definition. In-container
+# probe: the image installs curl and ships PORT=3100. /api/health answers 200
+# JSON once the listener and the instance bootstrap are ready. Port is the
+# image default; quadlet expands only plain $VAR, so keep this in sync if you
+# ever override PORT in paperclip.env.
+HealthCmd=curl -f http://127.0.0.1:3100/api/health || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
 
 [Service]
 Restart=on-failure
