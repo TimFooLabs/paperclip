@@ -11,6 +11,26 @@ export const ADAPTER_LABEL = "Hermes Agent";
 /** Default CLI binary name. */
 export const HERMES_CLI = "hermes";
 
+/**
+ * Output formats accepted by `hermes chat --format`.
+ * Must stay in sync with `hermes chat --help`.
+ *
+ * - "text": human-oriented plain text (the surface the adapter used to scrape).
+ * - "stream-json": newline-delimited JSON events. Implies --quiet and cannot be
+ *   combined with --tui; requires -q/--query, which every adapter run passes.
+ */
+export const HERMES_OUTPUT_FORMATS = ["stream-json", "text"] as const;
+
+export type HermesOutputFormat = (typeof HERMES_OUTPUT_FORMATS)[number];
+
+/**
+ * Protocol the adapter asks Hermes for. stream-json is the default: the legacy
+ * text path parses a Rich-rendering console, which both mis-attributes tool
+ * noise as response text and crashes outright when prompt content looks like
+ * Rich markup (TIM-66).
+ */
+export const DEFAULT_OUTPUT_FORMAT: HermesOutputFormat = "stream-json";
+
 /** Default timeout for a single execution run (seconds). */
 export const DEFAULT_TIMEOUT_SEC = 1800;
 

@@ -1,12 +1,15 @@
 /**
  * Server-side execution logic for the Hermes Agent adapter.
  *
- * Spawns `hermes chat -q "..." -Q` as a child process, streams output,
- * and returns structured results to Paperclip.
+ * Spawns `hermes chat -q "..." -Q --format stream-json` as a child process,
+ * streams output, and returns structured results to Paperclip.
  *
  * Verified CLI flags (hermes chat):
  *   -q/--query         single query (non-interactive)
  *   -Q/--quiet         quiet mode (no banner/spinner, only response + session_id)
+ *   --format           output protocol: "text" (human-oriented) or "stream-json"
+ *                      (newline-delimited JSONL events; implies --quiet and
+ *                      cannot be combined with --tui)
  *   -m/--model         model name (e.g. anthropic/claude-sonnet-4)
  *   -t/--toolsets      comma-separated toolsets to enable
  *   --provider         inference provider (auto, openrouter, nous, etc.)
@@ -16,6 +19,14 @@
  *   --checkpoints      filesystem checkpoints
  *   --yolo             bypass dangerous-command approval prompts (agents have no TTY)
  *   --source           session source tag for filtering
+ *
+ * stream-json is the default protocol. Verified against the StreamJsonEmitter in
+ * hermes_cli/stream_json.py of the installed hermes-agent (v0.21.5+5778.g0a374d1):
+ * it emits `system/init`, interleaved `text` deltas / `tool_use` / `tool_result`,
+ * then one terminal `result` envelope, and finally re-prints `session_id:` on
+ * stderr (same stderr contract as -Q). Because that protocol is machine-readable,
+ * the adapter no longer has to guess at Rich-rendered console output — which is
+ * what made prompt text like `[guide](/issues/TIM-66)` fatal.
  */
 
 import fs from "node:fs/promises";
@@ -51,7 +62,9 @@ import {
   DEFAULT_TIMEOUT_SEC,
   DEFAULT_GRACE_SEC,
   DEFAULT_MODEL,
-  VALID_PROVIDERS,
+  DEFAULT_OUTPUT_FORMAT,
+  HERMES_OUTPUT_FORMATS,
+  type HermesOutputFormat,
 } from "../shared/constants.js";
 
 import {
@@ -239,6 +252,8 @@ interface ParsedOutput {
   usage?: UsageSummary;
   costUsd?: number;
   errorMessage?: string;
+  /** Exit code reported by the stream-json `result` envelope, when nonzero. */
+  exitCode?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +289,7 @@ function cleanResponse(raw: string): string {
 // Output parsing
 // ---------------------------------------------------------------------------
 
-function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
+export function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
   const combined = stdout + "\n" + stderr;
   const result: ParsedOutput = {};
 
@@ -331,6 +346,150 @@ function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// stream-json protocol parsing (--format stream-json)
+// ---------------------------------------------------------------------------
+
+/**
+ * One newline-delimited JSON record from `hermes chat --format stream-json`.
+ *
+ * Field surface mirrors hermes_cli/stream_json.py (StreamJsonEmitter) on the
+ * installed hermes-agent; only the fields the adapter consumes are typed, and
+ * every one of them is optional because older emitters may omit it.
+ */
+export interface HermesStreamEvent {
+  type?: unknown;
+  subtype?: unknown;
+  session_id?: unknown;
+  model?: unknown;
+  /** `text` events: a streaming delta of the current turn. */
+  text?: unknown;
+  /** `tool_use` / `tool_result` events. */
+  name?: unknown;
+  is_error?: unknown;
+  /** Terminal `result` envelope. */
+  exit_code?: unknown;
+  tokens?: {
+    input?: unknown;
+    output?: unknown;
+    total?: unknown;
+    cache_read?: unknown;
+    cache_write?: unknown;
+  };
+  error?: unknown;
+}
+
+const STREAM_EVENT_TYPES = new Set(["system", "text", "tool_use", "tool_result", "result"]);
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function asNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Parse a `--format stream-json` run.
+ *
+ * Returns `recognized: false` when stdout holds no stream-json events at all —
+ * the signal that an older Hermes rejected the flag and fell back to text, or
+ * that the process died before emitting anything. Callers then fall back to
+ * `parseHermesOutput`.
+ *
+ * The response comes from the terminal `result.text`, NOT from concatenating
+ * `text` deltas. Deltas are per-turn segments and include the pre-tool
+ * commentary of every intermediate turn; `result.text` is the final answer
+ * only. Verified against a real tool-using capture: the two disagree. Deltas
+ * are used only when the run produced no `result` envelope (truncated stream),
+ * where the last turn's text is still better than nothing.
+ */
+export function parseHermesStreamJson(
+  stdout: string,
+): ParsedOutput & { recognized: boolean } {
+  const events: HermesStreamEvent[] = [];
+
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue; // not JSON — the legacy parser's problem, not ours
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const candidate = parsed as HermesStreamEvent;
+    if (typeof candidate.type !== "string") continue;
+    if (!STREAM_EVENT_TYPES.has(candidate.type)) continue;
+    events.push(candidate);
+  }
+
+  const out: ParsedOutput & { recognized: boolean } = { recognized: events.length > 0 };
+  if (!out.recognized) return out;
+
+  const resultEvent = [...events].reverse().find((e) => e.type === "result");
+  const initEvent = events.find((e) => e.type === "system" && e.subtype === "init");
+
+  // `result.session_id` wins; `system/init.session_id` covers a run that died
+  // before its result envelope was written.
+  const sessionId =
+    asString(resultEvent?.session_id) ?? asString(initEvent?.session_id);
+  if (sessionId) out.sessionId = sessionId;
+
+  const resultText = asString(resultEvent?.text);
+  if (resultText !== undefined) {
+    out.response = resultText;
+  } else {
+    const deltas = events
+      .filter((e) => e.type === "text")
+      .map((e) => asString(e.text) ?? "")
+      .join("");
+    if (deltas.length > 0) out.response = deltas;
+  }
+
+  const tokens = resultEvent?.tokens;
+  if (tokens && typeof tokens === "object") {
+    const inputTokens = asNumber(tokens.input);
+    const outputTokens = asNumber(tokens.output);
+    if (inputTokens !== undefined || outputTokens !== undefined) {
+      out.usage = {
+        inputTokens: inputTokens ?? 0,
+        outputTokens: outputTokens ?? 0,
+        ...(asNumber(tokens.cache_read) !== undefined
+          ? { cachedInputTokens: asNumber(tokens.cache_read) }
+          : {}),
+      };
+    }
+  }
+
+  const exitCode = asNumber(resultEvent?.exit_code);
+  if (exitCode !== undefined && exitCode !== 0) {
+    out.exitCode = exitCode;
+  }
+
+  const eventError = asString(resultEvent?.error);
+  if (eventError) {
+    out.errorMessage = eventError;
+  }
+
+  // stream-json carries no cost figure; leave costUsd unset rather than guess.
+  return out;
+}
+
+/**
+ * Resolve the requested output protocol. Unknown or unset values fall back to
+ * the default rather than throwing — a bad adapterConfig override should not
+ * stop an agent from running.
+ */
+export function resolveOutputFormat(config: Record<string, unknown>): HermesOutputFormat {
+  const requested = cfgString(config.outputFormat);
+  if (requested && (HERMES_OUTPUT_FORMATS as readonly string[]).includes(requested)) {
+    return requested as HermesOutputFormat;
+  }
+  return DEFAULT_OUTPUT_FORMAT;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +619,19 @@ export async function execute(
   const args: string[] = ["chat", "-q", prompt];
   if (useQuiet) args.push("-Q");
 
+  // Prefer the machine-readable stream-json protocol over the human-oriented
+  // text surface. Verified against the installed hermes-agent: `--format
+  // stream-json` emits JSONL events, *implies --quiet*, requires -q/--query
+  // (every adapter run passes -q), and rejects --tui (never passed here).
+  // Opt out with outputFormat: "text".
+  const outputFormat = resolveOutputFormat(config);
+  if (outputFormat === "stream-json") {
+    args.push("--format", "stream-json");
+    // stream-json already implies --quiet inside Hermes, so -Q above is
+    // redundant here — kept so the TIM-67 guarantee holds even if a future
+    // Hermes drops that implication. `quiet: false` cannot un-quiet the run.
+  }
+
   if (model) {
     args.push("-m", model);
   }
@@ -583,12 +755,29 @@ export async function execute(
   });
 
   // ── Parse output ───────────────────────────────────────────────────────
-  const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");
+  // stream-json first; fall back to the legacy text parser when Hermes did not
+  // emit the protocol (older CLI that rejected --format, or a crash before any
+  // event was written). The path taken is logged so protocol regressions are
+  // visible in the run log instead of silently degrading to screen-scraping.
+  const stream = parseHermesStreamJson(result.stdout || "");
+  const parsed = stream.recognized
+    ? stream
+    : parseHermesOutput(result.stdout || "", result.stderr || "");
 
   await ctx.onLog(
     "stdout",
     `[hermes] Exit code: ${result.exitCode ?? "null"}, timed out: ${result.timedOut}\n`,
   );
+  await ctx.onLog(
+    "stdout",
+    `[hermes] Parsed output via ${stream.recognized ? "stream-json protocol" : "legacy text fallback"}\n`,
+  );
+  if (stream.recognized && parsed.exitCode !== undefined && parsed.exitCode !== result.exitCode) {
+    await ctx.onLog(
+      "stdout",
+      `[hermes] Note: result envelope reported exit_code=${parsed.exitCode}, process exited ${result.exitCode}\n`,
+    );
+  }
   if (parsed.sessionId) {
     await ctx.onLog("stdout", `[hermes] Session: ${parsed.sessionId}\n`);
   }
