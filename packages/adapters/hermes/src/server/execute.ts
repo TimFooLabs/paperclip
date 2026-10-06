@@ -240,10 +240,80 @@ interface ParsedOutput {
 // Response cleaning
 // ---------------------------------------------------------------------------
 
-/** Strip noise lines from a Hermes response (tool output, system messages, etc.) */
+/**
+ * Strip ANSI escape sequences (CSI, OSC) from terminal text.
+ * Same pattern as the UI transcript parser (ui/parse-stdout.ts): Reasoning-box
+ * borders can carry color codes even when stdout is piped, and border
+ * detection has to see the bare glyphs.
+ */
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, "")
+    .replace(/\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+}
+
+/**
+ * Reasoning box (quiet mode), mirroring the UI transcript parser:
+ *
+ *   ┌─ Reasoning ───────────────────────────────────────────────┐
+ *    wrapped reasoning text, one terminal line per chunk
+ *   └───────────────────────────────────────────────────────────┘
+ *
+ * The opening border carries the literal title `Reasoning`; the closing
+ * border is a bare └─…─┘ rule and can arrive glued to the tail of the last
+ * interior line. Border width varies with the terminal width, so only the box
+ * glyphs are matched, never a fixed column count.
+ */
+const REASONING_BOX_OPEN = /^┌─\s*Reasoning\s*─+┐$/u;
+const REASONING_BOX_CLOSE = /^└─+┘$/u;
+const REASONING_BOX_CLOSE_TRAILING = /└─+┘$/u;
+
+/**
+ * Strip noise lines from a Hermes response (tool output, system messages,
+ * reasoning, etc.)
+ *
+ * Unlike the UI transcript parser — which keeps Reasoning-box interior lines
+ * as thinking entries — the run response has no thinking channel, so a box is
+ * dropped whole: opening border through closing border, interior included. A
+ * box that never closes drops to the end of the output, so a truncated run
+ * cannot leak reasoning into the persisted summary/resultJson either. A
+ * closing border glued to a line outside a box is content-free decoration:
+ * strip the border and keep the text. Kept lines pass through untouched
+ * (ANSI codes included), so answer-only output is unchanged.
+ */
 function cleanResponse(raw: string): string {
-  return raw
-    .split("\n")
+  let inReasoningBox = false;
+
+  const kept: string[] = [];
+  for (const line of raw.split("\n")) {
+    const bare = stripAnsi(line).trim();
+
+    if (inReasoningBox) {
+      // Standalone border, or one glued to the tail of the last interior
+      // line: the leftover text is reasoning too, so it goes with the box.
+      if (REASONING_BOX_CLOSE.test(bare) || REASONING_BOX_CLOSE_TRAILING.test(bare)) {
+        inReasoningBox = false;
+      }
+      continue;
+    }
+
+    if (REASONING_BOX_OPEN.test(bare)) {
+      inReasoningBox = true;
+      continue;
+    }
+
+    // A closing border glued to a line outside a box is content-free
+    // decoration: strip the border and keep the text.
+    if (REASONING_BOX_CLOSE_TRAILING.test(bare)) {
+      const stripped = line.replace(REASONING_BOX_CLOSE_TRAILING, "").trimEnd();
+      if (stripped) kept.push(stripped);
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept
     .filter((line) => {
       const t = line.trim();
       if (!t) return true; // keep blank lines for paragraph separation
@@ -269,7 +339,12 @@ function cleanResponse(raw: string): string {
 // Output parsing
 // ---------------------------------------------------------------------------
 
-function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
+/**
+ * Parse raw Hermes stdout/stderr into the structured run output. Exported for
+ * the output-parsing regression tests; the response field must never contain
+ * Reasoning-box content (see cleanResponse).
+ */
+export function parseHermesOutput(stdout: string, stderr: string): ParsedOutput {
   const combined = stdout + "\n" + stderr;
   const result: ParsedOutput = {};
 
