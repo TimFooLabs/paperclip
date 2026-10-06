@@ -160,7 +160,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           else
             {
-              echo 'runner=ubuntu-latest'
+              echo 'runner=vps-coolify'  # fork: self-hosted ephemeral runner on vps-contabo
               echo 'max_parallel_default=32'
               echo 'max_parallel_limit=57'
             } >> "$GITHUB_OUTPUT"

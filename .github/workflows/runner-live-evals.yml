@@ -71,7 +71,7 @@ jobs:
           AWS_PAID_RUNNER_ENABLED: ${{ vars.RUNNER_E2E_AWS_ENABLED }}
         run: |
           set -euo pipefail
-          github_runner='ubuntu-latest'
+          github_runner='vps-coolify'  # fork: self-hosted ephemeral runner on vps-contabo
           aws_runner='runs-on/fleet=paperclip-public-pr-x64/env=public-ci'
 
           if [ "$AWS_PAID_RUNNER_ENABLED" = true ]; then
