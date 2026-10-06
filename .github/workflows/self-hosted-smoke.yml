@@ -1,0 +1,35 @@
+name: Self-hosted runner smoke
+
+# Fork-only canary for the ephemeral self-hosted runner (label: vps-coolify) on
+# vps-contabo. Not part of upstream CI. Verifies runner identity, tooling and the
+# socket-less hardening on every master push.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: vps-coolify
+    timeout-minutes: 10
+    steps:
+      - name: Runner identity and hardening assertions
+        run: |
+          echo "runner: $RUNNER_NAME"
+          echo "host: $(uname -sr)"
+          echo "cpus: $(nproc), mem: $(free -h | awk '/Mem:/{print $2}')"
+          echo "node: $(node --version 2>/dev/null || echo none)"
+          echo "python3: $(python3 --version 2>/dev/null || echo none)"
+          if [ -S /var/run/docker.sock ]; then
+            echo "FAIL: docker socket is mounted"; exit 1
+          else
+            echo "OK: docker socket absent (hardening intact)"
+          fi
+          echo "workdir: $GITHUB_WORKSPACE"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Checkout sanity
+        run: |
+          echo "HEAD: $(git rev-parse --short HEAD)"
+          echo "files: $(git ls-files | wc -l)"
