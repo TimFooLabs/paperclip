@@ -268,6 +268,9 @@ const REASONING_BOX_OPEN = /^┌─\s*Reasoning\s*─+┐$/u;
 const REASONING_BOX_CLOSE = /^└─+┘$/u;
 const REASONING_BOX_CLOSE_TRAILING = /└─+┘$/u;
 
+/** A run of ANSI escapes glued to the end of a line (e.g. a reset after a border). */
+const ANSI_TAIL = /(?:\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]))+\s*$/;
+
 /**
  * Strip noise lines from a Hermes response (tool output, system messages,
  * reasoning, etc.)
@@ -303,9 +306,12 @@ function cleanResponse(raw: string): string {
     }
 
     // A closing border glued to a line outside a box is content-free
-    // decoration: strip the border and keep the text.
+    // decoration: strip the border and keep the text. The raw tail can carry
+    // ANSI codes after the border (the TUI's reset), which would hide it from
+    // a raw-line replace — drop those first, then the border underneath.
     if (REASONING_BOX_CLOSE_TRAILING.test(bare)) {
-      const stripped = line.replace(REASONING_BOX_CLOSE_TRAILING, "").trimEnd();
+      const withoutBorder = line.replace(ANSI_TAIL, "").replace(REASONING_BOX_CLOSE_TRAILING, "");
+      const stripped = withoutBorder.trimEnd();
       if (stripped) kept.push(stripped);
       continue;
     }

@@ -145,6 +145,20 @@ describe("parseHermesOutput: quiet-mode Reasoning box in the run response", () =
     expect(parsed.response).toBe("Answer text");
   });
 
+  it("strips a glued closing border that carries a trailing ANSI reset", () => {
+    // The TUI appends a reset after the border; border detection sees the
+    // bare glyphs, so the strip has to look past the reset.
+    const glued = parseQuiet([`Answer text${closingBorder()}\u001B[0m`]);
+    expect(glued.response).toBe("Answer text");
+    expect(glued.response).not.toContain("└");
+    expect(glued.response).not.toContain("\u001B[0m");
+
+    // A border-only line outside a box is decoration, ANSI included.
+    const lone = parseQuiet([`${closingBorder()}\u001B[0m`, "Real answer."]);
+    expect(lone.response).toBe("Real answer.");
+    expect(lone.response).not.toContain("└");
+  });
+
   it("drops two consecutive boxes but keeps the answers between them", () => {
     const parsed = parseQuiet([
       reasoningBorder(),
